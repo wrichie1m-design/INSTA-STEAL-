@@ -4,7 +4,7 @@ local CONFIG = {
     HOLD_MAX = 2.6,
     ENTRY_DELAY = 0.3,
     COOLDOWN = 0.05,
-    STEAL_RANGE = 10,
+    STEAL_RANGE = 25,
     PRIME_RANGE = 80,
 }
 
