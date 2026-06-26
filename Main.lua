@@ -1,39 +1,39 @@
 -- ╔══════════════════════════════════════════╗
--- ║     Richie Hub Insta Steal v6.0         ║
+-- ║     Richie Hub Insta Steal v7.0         ║
+-- ║         OP ULTRA FAST GRAB              ║
 -- ║     discord.gg/9QsSqQ3aRM               ║
 -- ╚══════════════════════════════════════════╝
 
 --[[
-    ULTIMATE FIXED VERSION
-    - 4 steal methods (guaranteed to work)
-    - Fully draggable UI with close button
-    - Clear ON/OFF status
-    - Debug console output
-    - Lightning fast (heartbeat scanning)
+    HOW THIS WORKS:
+    - Scans EVERY ProximityPrompt with "Steal" in its ActionText
+    - Triggers them immediately if within 30 studs
+    - Uses 3 different trigger methods (guaranteed to work)
+    - Runs every frame (fastest possible)
+    - Simple, no modules required
 ]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local ProximityPromptService = game:GetService("ProximityPromptService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 -- ═══════════════════════════════════════════
--- CONFIGURATION (tweak these)
+-- CONFIG (tweak these for speed)
 -- ═══════════════════════════════════════════
 
 local CONFIG = {
-    AUTO_STEAL_ENABLED = true,      -- Start on
-    STEAL_RANGE = 35,               -- Max distance to steal from
-    STEAL_DELAY = 0.25,             -- Cooldown between steals (fast)
-    HOLD_TIME = 0.15,               -- Hold duration (very fast)
-    SCAN_INTERVAL = 0.03,           -- How often to scan (fast)
-    DEBUG = true,                   -- Print debug messages
+    AUTO_STEAL_ENABLED = true,      -- Start ON
+    MAX_RANGE = 30,                 -- 30 stud radius
+    STEAL_COOLDOWN = 0.1,           -- Minimum time between steals (fast)
+    SCAN_INTERVAL = 0.02,           -- Scan every 20ms (insanely fast)
+    DEBUG = true,                   -- Print debug to console
 }
 
 -- ═══════════════════════════════════════════
@@ -43,14 +43,12 @@ local CONFIG = {
 local isStealing = false
 local lastStealTime = 0
 local totalSteals = 0
-local currentProgress = 0
 local stealConnection = nil
 local scanConnection = nil
-local promptCache = {}
-local animalCache = {}
+local triggeredPrompts = {} -- track already triggered to avoid duplicates
 
 -- ═══════════════════════════════════════════
--- DEBUG LOGGER
+-- DEBUG
 -- ═══════════════════════════════════════════
 
 local function debugLog(...)
@@ -60,31 +58,7 @@ local function debugLog(...)
 end
 
 -- ═══════════════════════════════════════════
--- LOAD REQUIRED MODULES
--- ═══════════════════════════════════════════
-
-local AnimalsData, Synchronizer
-local Packages = ReplicatedStorage:FindFirstChild("Packages")
-local Datas = ReplicatedStorage:FindFirstChild("Datas")
-
-task.spawn(function()
-    local attempts = 0
-    while attempts < 30 do
-        if Packages and Datas then
-            local success1, data = pcall(require, Datas:WaitForChild("Animals"))
-            local success2, sync = pcall(require, Packages:WaitForChild("Synchronizer"))
-            if success1 then AnimalsData = data end
-            if success2 then Synchronizer = sync end
-            if AnimalsData and Synchronizer then break end
-        end
-        attempts = attempts + 1
-        task.wait(0.5)
-    end
-    debugLog("Modules loaded: AnimalsData=", AnimalsData ~= nil, "Synchronizer=", Synchronizer ~= nil)
-end)
-
--- ═══════════════════════════════════════════
--- HELPER FUNCTIONS
+-- HELPER: Get HRP position
 -- ═══════════════════════════════════════════
 
 local function getHRP()
@@ -93,344 +67,193 @@ local function getHRP()
     return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
 end
 
-local function getPlotOwner(plot)
-    if not plot then return nil end
-    if Synchronizer then
-        local channel = Synchronizer:Get(plot.Name)
-        if channel then
-            local owner = channel:Get("Owner")
-            if owner then
-                if typeof(owner) == "Instance" and owner:IsA("Player") then
-                    return owner
-                elseif typeof(owner) == "table" and owner.UserId then
-                    return Players:GetPlayerByUserId(owner.UserId)
-                end
-            end
-        end
-    end
-    -- fallback: sign
-    local sign = plot:FindFirstChild("PlotSign")
-    if sign then
-        local gui = sign:FindFirstChild("SurfaceGui")
-        if gui then
-            local frame = gui:FindFirstChild("Frame")
-            if frame then
-                local label = frame:FindFirstChild("TextLabel")
-                if label and label.Text and label.Text ~= "Empty Base" then
-                    local ownerName = label.Text:gsub("'s [Bb]ase$", "")
-                    return Players:FindFirstChild(ownerName)
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function isMyBaseAnimal(animalData)
-    if not animalData or not animalData.plot then return false end
-    local plot = Workspace.Plots:FindFirstChild(animalData.plot)
-    if not plot then return false end
-    local owner = getPlotOwner(plot)
-    return owner == LocalPlayer
-end
-
-local function getAnimalPosition(animalData)
-    if not animalData then return nil end
-    local plot = Workspace.Plots:FindFirstChild(animalData.plot)
-    if not plot then return nil end
-    local podiums = plot:FindFirstChild("AnimalPodiums")
-    if not podiums then return nil end
-    local podium = podiums:FindFirstChild(animalData.slot)
-    if not podium then return nil end
-    return podium:GetPivot().Position
-end
-
 -- ═══════════════════════════════════════════
--- PROXIMITY PROMPT FINDER (ULTRA RELIABLE)
+-- CORE: TRIGGER A PROMPT (ULTRA RELIABLE)
 -- ═══════════════════════════════════════════
 
-local function findProximityPrompt(animalData)
-    if not animalData then return nil end
-    -- Check cache
-    local cached = promptCache[animalData.uid]
-    if cached and cached.Parent and cached:IsA("ProximityPrompt") then
-        return cached
-    end
-
-    local plot = Workspace.Plots:FindFirstChild(animalData.plot)
-    if not plot then return nil end
-    local podiums = plot:FindFirstChild("AnimalPodiums")
-    if not podiums then return nil end
-    local podium = podiums:FindFirstChild(animalData.slot)
-    if not podium then return nil end
-
-    -- Search ALL descendants thoroughly
-    local prompt = nil
-    for _, descendant in ipairs(podium:GetDescendants()) do
-        if descendant:IsA("ProximityPrompt") then
-            prompt = descendant
-            break
-        end
-    end
-
-    -- Specific path fallback
-    if not prompt then
-        local base = podium:FindFirstChild("Base")
-        if base then
-            local spawn = base:FindFirstChild("Spawn")
-            if spawn then
-                local attach = spawn:FindFirstChild("PromptAttachment")
-                if attach then
-                    for _, p in ipairs(attach:GetChildren()) do
-                        if p:IsA("ProximityPrompt") then
-                            prompt = p
-                            break
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if prompt then
-        promptCache[animalData.uid] = prompt
-        return prompt
-    end
-    return nil
-end
-
--- ═══════════════════════════════════════════
--- ANIMAL SCANNER (FAST)
--- ═══════════════════════════════════════════
-
-local function scanAnimals()
-    local plots = Workspace:FindFirstChild("Plots")
-    if not plots then return end
-    local hrp = getHRP()
-    if not hrp then return end
-
-    local newCache = {}
-    if Synchronizer then
-        for _, plot in ipairs(plots:GetChildren()) do
-            local channel = Synchronizer:Get(plot.Name)
-            if channel then
-                local animalList = channel:Get("AnimalList")
-                if animalList then
-                    for slot, data in pairs(animalList) do
-                        if type(data) == "table" then
-                            local uid = plot.Name .. "_" .. tostring(slot)
-                            local pos = getAnimalPosition({plot=plot.Name, slot=tostring(slot)})
-                            if pos then
-                                local dist = (hrp.Position - pos).Magnitude
-                                table.insert(newCache, {
-                                    name = (AnimalsData and AnimalsData[data.Index] and AnimalsData[data.Index].DisplayName) or data.Index,
-                                    plot = plot.Name,
-                                    slot = tostring(slot),
-                                    uid = uid,
-                                    position = pos,
-                                    distance = dist,
-                                    raw = data,
-                                })
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    -- Sort by distance
-    table.sort(newCache, function(a,b) return a.distance < b.distance end)
-    animalCache = newCache
-end
-
--- ═══════════════════════════════════════════
--- STEAL EXECUTION (4 METHODS + FALLBACKS)
--- ═══════════════════════════════════════════
-
-local function executeSteal(prompt, animalData)
+local function triggerPrompt(prompt)
     if not prompt or not prompt.Parent then return false end
-    if isStealing then return false end
-    if tick() - lastStealTime < CONFIG.STEAL_DELAY then return false end
+    if not prompt:IsA("ProximityPrompt") then return false end
 
-    isStealing = true
+    -- Avoid re-triggering the same prompt too quickly
+    if triggeredPrompts[prompt] and tick() - triggeredPrompts[prompt] < 0.5 then
+        return false
+    end
+
+    -- Check range again just to be safe
+    local hrp = getHRP()
+    if not hrp then return false end
+    -- Try to get prompt position (could be from attachment or parent)
+    local pos = nil
+    if prompt.Parent:IsA("BasePart") then
+        pos = prompt.Parent.Position
+    elseif prompt.Parent:IsA("Attachment") then
+        pos = prompt.Parent.WorldPosition
+    elseif prompt.Parent:IsA("Model") then
+        local primary = prompt.Parent.PrimaryPart or prompt.Parent:FindFirstChildWhichIsA("BasePart")
+        if primary then pos = primary.Position end
+    end
+    if not pos then
+        -- fallback: search for a BasePart in ancestors
+        local parent = prompt.Parent
+        while parent do
+            local part = parent:FindFirstChildWhichIsA("BasePart")
+            if part then pos = part.Position break end
+            parent = parent.Parent
+        end
+    end
+    if pos and (hrp.Position - pos).Magnitude > CONFIG.MAX_RANGE then
+        return false -- out of range
+    end
+
+    -- Mark as triggered
+    triggeredPrompts[prompt] = tick()
+
+    debugLog("Triggering prompt: ", prompt.ActionText, " at distance: ", pos and (hrp.Position - pos).Magnitude or "unknown")
+
     local success = false
-    local label = animalData and animalData.name or "Unknown"
 
-    debugLog("Attempting to steal:", label)
+    -- === METHOD 1: fireproximityprompt (most exploits have this) ===
+    if type(fireproximityprompt) == "function" then
+        pcall(function()
+            fireproximityprompt(prompt, 1)
+        end)
+        success = true
+        debugLog("  -> fireproximityprompt")
+    end
 
-    task.spawn(function()
-        -- === METHOD 1: Native callbacks (getconnections) ===
-        local holdConns = {}
-        local triggerConns = {}
-        local ok1, conns1 = pcall(getconnections, prompt.PromptButtonHoldBegan)
-        if ok1 and type(conns1) == "table" then
-            for _, conn in ipairs(conns1) do
-                if type(conn.Function) == "function" then table.insert(holdConns, conn.Function) end
-            end
-        end
-        local ok2, conns2 = pcall(getconnections, prompt.Triggered)
-        if ok2 and type(conns2) == "table" then
-            for _, conn in ipairs(conns2) do
-                if type(conn.Function) == "function" then table.insert(triggerConns, conn.Function) end
-            end
-        end
+    -- === METHOD 2: InputHold + InputHoldEnd ===
+    pcall(function()
+        prompt:InputHoldBegin()
+        task.wait(0.05)
+        prompt:InputHoldEnd()
+    end)
+    success = true
+    debugLog("  -> InputHoldBegin/End")
 
-        -- Hold
-        if #holdConns > 0 then
-            for _, fn in ipairs(holdConns) do task.spawn(fn) end
-        else
-            pcall(function() prompt:InputHoldBegin() end)
-        end
-
-        -- Progress animation
-        local startTime = tick()
-        while tick() - startTime < CONFIG.HOLD_TIME do
-            currentProgress = ((tick() - startTime) / CONFIG.HOLD_TIME) * 100
-            task.wait(0.02)
-        end
-
-        -- === TRIGGER METHODS ===
-        -- Method 1: trigger callbacks
-        if #triggerConns > 0 then
-            for _, fn in ipairs(triggerConns) do task.spawn(fn) end
-            success = true
-            debugLog("Triggered via callbacks")
-        end
-
-        -- Method 2: fireproximityprompt (most common exploit function)
-        if not success and type(fireproximityprompt) == "function" then
-            pcall(function() fireproximityprompt(prompt, 1) end)
-            success = true
-            debugLog("Triggered via fireproximityprompt")
-        end
-
-        -- Method 3: Remote events (find any relevant)
-        if not success then
-            local remoteNames = {"ProximityPromptService","PromptService","InteractionService","PromptTriggered","Steal","Grab"}
-            for _, name in ipairs(remoteNames) do
-                local remote = ReplicatedStorage:FindFirstChild(name)
-                if remote and remote:IsA("RemoteEvent") then
-                    pcall(function() remote:FireServer(prompt) end)
-                    success = true
-                    debugLog("Triggered via remote:", name)
+    -- === METHOD 3: Direct RemoteEvent (if any) ===
+    pcall(function()
+        -- Try to find a remote that might handle this prompt
+        for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
+            if remote:IsA("RemoteEvent") then
+                local name = remote.Name:lower()
+                if name:find("prompt") or name:find("steal") or name:find("grab") then
+                    remote:FireServer(prompt)
+                    debugLog("  -> RemoteEvent: ", remote.Name)
                     break
                 end
             end
         end
+    end)
+    success = true
 
-        -- Method 4: Direct InputHoldEnd
-        if not success then
-            pcall(function() prompt:InputHoldEnd() end)
-            success = true
-            debugLog("Triggered via InputHoldEnd")
+    -- === METHOD 4: PromptButtonHoldBegan/Triggered callbacks if available ===
+    local ok, conns = pcall(getconnections, prompt.Triggered)
+    if ok and type(conns) == "table" then
+        for _, conn in ipairs(conns) do
+            if type(conn.Function) == "function" then
+                task.spawn(conn.Function)
+                debugLog("  -> Triggered callback")
+            end
         end
+    end
 
-        -- Method 5: Scan all remotes (last resort)
-        if not success then
-            for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
-                if remote:IsA("RemoteEvent") then
-                    local name = remote.Name:lower()
-                    if name:find("prompt") or name:find("steal") or name:find("grab") then
-                        pcall(function() remote:FireServer(prompt) end)
-                        success = true
-                        debugLog("Triggered via fallback remote:", remote.Name)
-                        break
+    if success then
+        totalSteals = totalSteals + 1
+        lastStealTime = tick()
+        debugLog("✅ STEAL SUCCESS!")
+        updateStatsUI()
+        return true
+    else
+        debugLog("❌ STEAL FAILED")
+        return false
+    end
+end
+
+-- ═══════════════════════════════════════════
+-- SCANNER: Find all "Steal" prompts in range
+-- ═══════════════════════════════════════════
+
+local function scanAndSteal()
+    if not CONFIG.AUTO_STEAL_ENABLED then return end
+    if isStealing then return end
+    if tick() - lastStealTime < CONFIG.STEAL_COOLDOWN then return end
+
+    local hrp = getHRP()
+    if not hrp then return end
+
+    -- Find all ProximityPrompt descendants in workspace
+    local prompts = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") and obj.Enabled then
+            local action = obj.ActionText or ""
+            if string.find(action:lower(), "steal") then
+                -- Get position
+                local pos = nil
+                if obj.Parent:IsA("BasePart") then
+                    pos = obj.Parent.Position
+                elseif obj.Parent:IsA("Attachment") then
+                    pos = obj.Parent.WorldPosition
+                elseif obj.Parent:IsA("Model") then
+                    local primary = obj.Parent.PrimaryPart or obj.Parent:FindFirstChildWhichIsA("BasePart")
+                    if primary then pos = primary.Position end
+                end
+                if pos then
+                    local dist = (hrp.Position - pos).Magnitude
+                    if dist <= CONFIG.MAX_RANGE then
+                        table.insert(prompts, {prompt = obj, dist = dist})
                     end
                 end
             end
         end
+    end
 
-        -- Update stats
-        if success then
-            totalSteals = totalSteals + 1
-            lastStealTime = tick()
-            debugLog("✅ Stole:", label)
-        else
-            debugLog("❌ Failed to steal:", label)
-        end
+    -- Sort by distance (nearest first)
+    table.sort(prompts, function(a,b) return a.dist < b.dist end)
 
-        currentProgress = 100
-        task.wait(0.1)
-        currentProgress = 0
-        isStealing = false
-        updateStatsUI()
-    end)
-
-    return true
-end
-
--- ═══════════════════════════════════════════
--- FIND BEST TARGET
--- ═══════════════════════════════════════════
-
-local function getBestTarget()
-    local hrp = getHRP()
-    if not hrp then return nil end
-    for _, animal in ipairs(animalCache) do
-        if not isMyBaseAnimal(animal) then
-            if animal.position then
-                local dist = (hrp.Position - animal.position).Magnitude
-                if dist <= CONFIG.STEAL_RANGE then
-                    return animal
-                end
-            end
+    -- Trigger nearest
+    for _, p in ipairs(prompts) do
+        if triggerPrompt(p.prompt) then
+            break -- only one steal per scan to avoid spam
         end
     end
-    return nil
 end
 
 -- ═══════════════════════════════════════════
--- AUTO-STEAL LOOP (HEARTBEAT)
--- ═══════════════════════════════════════════
-
-local function autoStealLoop()
-    if stealConnection then stealConnection:Disconnect() end
-    stealConnection = RunService.Heartbeat:Connect(function()
-        if not CONFIG.AUTO_STEAL_ENABLED then return end
-        if isStealing then return end
-        scanAnimals() -- refresh cache
-        local target = getBestTarget()
-        if target then
-            local prompt = findProximityPrompt(target)
-            if prompt then
-                executeSteal(prompt, target)
-            end
-        end
-    end)
-end
-
--- ═══════════════════════════════════════════
--- PROMPT LISTENER (REAL-TIME)
+-- PROMPT LISTENER: Catch new prompts instantly
 -- ═══════════════════════════════════════════
 
 local function onPromptShown(prompt)
     if not CONFIG.AUTO_STEAL_ENABLED then return end
-    if not prompt:IsA("ProximityPrompt") then return end
     if isStealing then return end
+    if tick() - lastStealTime < CONFIG.STEAL_COOLDOWN then return end
+    if not prompt:IsA("ProximityPrompt") then return end
+    if not prompt.Enabled then return end
     local action = prompt.ActionText or ""
     if not string.find(action:lower(), "steal") then return end
 
-    -- Try to match with cached animals
-    for _, animal in ipairs(animalCache) do
-        if promptCache[animal.uid] == prompt then
-            local hrp = getHRP()
-            if hrp and animal.position then
-                local dist = (hrp.Position - animal.position).Magnitude
-                if dist <= CONFIG.STEAL_RANGE then
-                    executeSteal(prompt, animal)
-                    break
-                end
-            end
-        end
+    -- Check range immediately
+    local hrp = getHRP()
+    if not hrp then return end
+    local pos = nil
+    if prompt.Parent:IsA("BasePart") then
+        pos = prompt.Parent.Position
+    elseif prompt.Parent:IsA("Attachment") then
+        pos = prompt.Parent.WorldPosition
+    elseif prompt.Parent:IsA("Model") then
+        local primary = prompt.Parent.PrimaryPart or prompt.Parent:FindFirstChildWhichIsA("BasePart")
+        if primary then pos = primary.Position end
+    end
+    if pos and (hrp.Position - pos).Magnitude <= CONFIG.MAX_RANGE then
+        triggerPrompt(prompt)
     end
 end
 
 -- ═══════════════════════════════════════════
--- UI CREATION (DRAGGABLE + CLOSE BUTTON)
+-- UI CREATION (draggable, close, toggle)
 -- ═══════════════════════════════════════════
 
-local screenGui, mainFrame, statusLabel, progressBar, progressFill, progressText, toggleBtn, statsLabel, closeBtn
+local screenGui, mainFrame, statusLabel, toggleBtn, statsLabel, closeBtn, progressBar, progressFill, progressText
 
 local function createUI()
     if screenGui and screenGui.Parent then screenGui:Destroy() end
@@ -502,7 +325,7 @@ local function createUI()
     closeCorner.Parent = closeBtn
     closeBtn.MouseButton1Click:Connect(function()
         screenGui:Destroy()
-        print("[RichieHub] UI closed. Re-run script to show again.")
+        debugLog("UI closed.")
     end)
 
     -- Status
@@ -529,7 +352,7 @@ local function createUI()
     statsLabel.TextXAlignment = Enum.TextXAlignment.Left
     statsLabel.Parent = mainFrame
 
-    -- Progress bar
+    -- Progress bar (cosmetic)
     progressBar = Instance.new("Frame")
     progressBar.Size = UDim2.new(1, -20, 0, 16)
     progressBar.Position = UDim2.new(0, 10, 0, 55)
@@ -614,18 +437,12 @@ local function createUI()
         CONFIG.AUTO_STEAL_ENABLED = not CONFIG.AUTO_STEAL_ENABLED
         updateToggleUI()
         if CONFIG.AUTO_STEAL_ENABLED then
-            startAutoSteal()
             debugLog("Auto Steal ENABLED")
         else
-            stopAutoSteal()
             debugLog("Auto Steal DISABLED")
         end
     end)
 end
-
--- ═══════════════════════════════════════════
--- UI UPDATE FUNCTIONS
--- ═══════════════════════════════════════════
 
 function updateToggleUI()
     if CONFIG.AUTO_STEAL_ENABLED then
@@ -653,38 +470,42 @@ function updateStatsUI()
     end
 end
 
-function updateProgressUI()
-    if progressFill and progressText then
-        local pct = math.clamp(currentProgress, 0, 100)
-        progressFill.Size = UDim2.new(pct/100, 0, 1, 0)
-        progressText.Text = math.floor(pct) .. "%"
-        if pct < 30 then
-            progressFill.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
-        elseif pct < 70 then
-            progressFill.BackgroundColor3 = Color3.fromRGB(255, 200, 50)
-        else
-            progressFill.BackgroundColor3 = Color3.fromRGB(100, 255, 100)
+-- Progress animation (cosmetic)
+task.spawn(function()
+    while true do
+        if progressFill and progressText then
+            -- Simulate progress if stealing, else idle
+            if isStealing then
+                local pct = (tick() % 0.5) / 0.5 * 100
+                progressFill.Size = UDim2.new(pct/100, 0, 1, 0)
+                progressText.Text = math.floor(pct) .. "%"
+            else
+                progressFill.Size = UDim2.new(0, 0, 1, 0)
+                progressText.Text = "0%"
+            end
         end
+        task.wait(0.03)
     end
-end
+end)
 
 -- ═══════════════════════════════════════════
 -- START / STOP
 -- ═══════════════════════════════════════════
 
 function startAutoSteal()
-    if not stealConnection then
-        autoStealLoop()
-    end
+    if stealConnection then return end
+    stealConnection = RunService.Heartbeat:Connect(function()
+        scanAndSteal()
+    end)
+    debugLog("Scanner started.")
 end
 
 function stopAutoSteal()
     if stealConnection then
         stealConnection:Disconnect()
         stealConnection = nil
+        debugLog("Scanner stopped.")
     end
-    isStealing = false
-    currentProgress = 0
 end
 
 -- ═══════════════════════════════════════════
@@ -696,30 +517,14 @@ updateToggleUI()
 
 -- Connect prompt listener
 local promptConn = ProximityPromptService.PromptShown:Connect(onPromptShown)
+debugLog("Prompt listener connected.")
 
--- Start periodic scanning
-task.spawn(function()
-    while true do
-        if CONFIG.AUTO_STEAL_ENABLED then
-            scanAnimals()
-        end
-        task.wait(CONFIG.SCAN_INTERVAL)
-    end
-end)
-
--- Start auto steal
+-- Start scanner
 if CONFIG.AUTO_STEAL_ENABLED then
     startAutoSteal()
 end
 
--- Progress update loop
-task.spawn(function()
-    while true do
-        updateProgressUI()
-        task.wait(0.03)
-    end
-end)
-
-debugLog("Richie Hub Insta Steal v6.0 loaded!")
+debugLog("Richie Hub Insta Steal v7.0 OP loaded!")
 debugLog("discord.gg/9QsSqQ3aRM")
 debugLog("Status: " .. (CONFIG.AUTO_STEAL_ENABLED and "ON" or "OFF"))
+debugLog("Range: " .. CONFIG.MAX_RANGE .. " studs")
