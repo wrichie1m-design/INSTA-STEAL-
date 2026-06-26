@@ -1,17 +1,17 @@
 -- ╔══════════════════════════════════════════╗
--- ║       Richie Hub Auto Grab v2           ║
+-- ║       Richie Hub Auto Grab v3           ║
 -- ║       discord.gg/9QsSqQ3aRM             ║
 -- ╚══════════════════════════════════════════╝
 
 local CONFIG = {
     AUTO_STEAL_ENABLED = true,
-    HOLD_MIN    = 0.3,    -- Reduced for faster grabs
-    HOLD_MAX    = 0.8,    -- Reduced max hold time
-    ENTRY_DELAY = 0.03,   -- Faster entry delay
-    COOLDOWN    = 0.01,   -- Minimal cooldown
-    STEAL_RANGE = 25,
-    PRIME_RANGE = 100,    -- Increased for better targeting
-    UPDATE_INTERVAL = 0.05, -- Faster updates
+    HOLD_MIN    = 0.3,
+    HOLD_MAX    = 0.8,
+    ENTRY_DELAY = 0.05,
+    COOLDOWN    = 0.02,
+    STEAL_RANGE = 30,
+    PRIME_RANGE = 150,
+    UPDATE_INTERVAL = 0.05,
 }
 
 local SAVE_FILE = "RichieHub_pos.json"
@@ -24,12 +24,13 @@ local S = {
     UserInputService = game:GetService("UserInputService"),
     TweenService     = game:GetService("TweenService"),
     HttpService      = game:GetService("HttpService"),
+    Workspace        = game:GetService("Workspace"),
 }
 S.LocalPlayer = S.Players.LocalPlayer
 
-local plots = workspace:WaitForChild("Plots")
+local plots = S.Workspace:WaitForChild("Plots")
 
--- ─── Optimized Sync Layer ──────────────────────────────────────────────────
+-- ─── Sync Layer ──────────────────────────────────────────────────────────────
 local Packages   = S.ReplicatedStorage:WaitForChild("Packages")
 local Datas      = S.ReplicatedStorage:WaitForChild("Datas")
 local AnimalsData= require(Datas:WaitForChild("Animals"))
@@ -45,15 +46,6 @@ end)()
 
 local plotAnimalSync = { caches = {}, connections = {} }
 
--- ─── Optimized Animal Cache ─────────────────────────────────────────────────
-local allAnimalsCache = {}
-local PromptMemoryCache = {}
-local InternalStealCache = {}
-local animalPositions = {}  -- Cache for positions
-local lastScanTime = 0
-local scanInterval = 2  -- Only rescan every 2 seconds
-
--- ─── Faster Synchronization ────────────────────────────────────────────────
 local function splitSyncPath(path)
     if typeof(path) == "table" then return path end
     local out = {}
@@ -129,21 +121,24 @@ end)
 
 local function getPlotChannelData(plotName) return plotAnimalSync.caches[plotName] end
 
--- ─── Optimized State ──────────────────────────────────────────────────────
+-- ─── State ───────────────────────────────────────────────────────────────────
+local allAnimalsCache = {}
+local PromptMemoryCache = {}
+local stealConnection = nil
+local isStealing = false
+
 local StealState = {
     active=false, startTime=0, phase="idle", label="",
     lastResult="", lastResultTime=0, totalSteals=0, failedSteals=0,
 }
-local stealConnection = nil
-local stealCoroutine = nil
 
--- ─── Optimized Helpers ────────────────────────────────────────────────────
+-- ─── Helpers ─────────────────────────────────────────────────────────────────
 local function getPlotOwner(plot)
-    local sign  = plot:FindFirstChild("PlotSign")
+    local sign = plot:FindFirstChild("PlotSign")
     if not sign then return nil end
-    local frame = sign:FindFirstChild("SurfaceGui")
-    if not frame then return nil end
-    frame = frame:FindFirstChild("Frame")
+    local gui = sign:FindFirstChild("SurfaceGui")
+    if not gui then return nil end
+    local frame = gui:FindFirstChild("Frame")
     if not frame then return nil end
     local lbl = frame:FindFirstChild("TextLabel")
     if not lbl or lbl.Text == "Empty Base" then return nil end
@@ -154,11 +149,12 @@ local function isMyBaseAnimal(animalData)
     if not animalData or not animalData.plot then return false end
     local plot = plots:FindFirstChild(animalData.plot)
     if not plot then return false end
-    return getPlotOwner(plot) == S.LocalPlayer.DisplayName
+    local owner = getPlotOwner(plot)
+    return owner == S.LocalPlayer.DisplayName
 end
 
 local function getPodium(animalData)
-    local plot = workspace.Plots:FindFirstChild(animalData.plot)
+    local plot = plots:FindFirstChild(animalData.plot)
     if not plot then return nil end
     local podiums = plot:FindFirstChild("AnimalPodiums")
     if not podiums then return nil end
@@ -166,50 +162,189 @@ local function getPodium(animalData)
 end
 
 local function getAnimalPosition(animalData)
+    local podium = getPodium(animalData)
+    if not podium then return nil end
+    return podium:GetPivot().Position
+end
+
+-- ─── FIXED: Better Proximity Prompt Finder ─────────────────────────────────
+local function findProximityPromptForAnimal(animalData)
     if not animalData then return nil end
-    local key = animalData.uid
-    if animalPositions[key] and animalPositions[key].time > tick() - 0.5 then
-        return animalPositions[key].pos
+    
+    -- Check cache first
+    local cached = PromptMemoryCache[animalData.uid]
+    if cached and cached.Parent and cached:IsA("ProximityPrompt") then
+        return cached
     end
     
     local podium = getPodium(animalData)
     if not podium then return nil end
-    local pos = podium:GetPivot().Position
-    animalPositions[key] = {pos = pos, time = tick()}
-    return pos
-end
-
-local function findProximityPromptForAnimal(animalData)
-    if not animalData then return nil end
-    local cached = PromptMemoryCache[animalData.uid]
-    if cached and cached.Parent then return cached end
-
-    local podium = getPodium(animalData)
-    if not podium then return nil end
-    local base = podium:FindFirstChild("Base")
-    if not base then return nil end
-    local spawn = base:FindFirstChild("Spawn")
-    if not spawn then return nil end
-    local attach = spawn:FindFirstChild("PromptAttachment")
-    if not attach then return nil end
-
-    for _, p in ipairs(attach:GetChildren()) do
-        if p:IsA("ProximityPrompt") then
-            PromptMemoryCache[animalData.uid] = p
-            return p
+    
+    -- Search through all descendants for ProximityPrompt
+    local prompt = nil
+    for _, descendant in ipairs(podium:GetDescendants()) do
+        if descendant:IsA("ProximityPrompt") then
+            prompt = descendant
+            break
         end
     end
+    
+    if prompt then
+        PromptMemoryCache[animalData.uid] = prompt
+        return prompt
+    end
+    
+    -- Try finding through the Spawn -> PromptAttachment path
+    local base = podium:FindFirstChild("Base")
+    if base then
+        local spawn = base:FindFirstChild("Spawn")
+        if spawn then
+            local attach = spawn:FindFirstChild("PromptAttachment")
+            if attach then
+                for _, p in ipairs(attach:GetChildren()) do
+                    if p:IsA("ProximityPrompt") then
+                        PromptMemoryCache[animalData.uid] = p
+                        return p
+                    end
+                end
+            end
+        end
+    end
+    
     return nil
 end
 
--- ─── Ultra-Fast Animal Scanner ────────────────────────────────────────────
-local function scanAllPlots()
-    local currentTime = tick()
-    if currentTime - lastScanTime < scanInterval then 
-        return #allAnimalsCache 
-    end
-    lastScanTime = currentTime
+local function distToAnimal(animalData)
+    local char = S.LocalPlayer.Character
+    if not char then return math.huge end
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
+    if not hrp then return math.huge end
+    local pos = getAnimalPosition(animalData)
+    if not pos then return math.huge end
+    return (hrp.Position - pos).Magnitude
+end
+
+-- ─── FIXED: Better Steal Execution ─────────────────────────────────────────
+local function executeSteal(prompt, animalData)
+    if not prompt or not prompt.Parent then return false end
+    if isStealing then return false end
     
+    isStealing = true
+    local lbl = animalData.name or "Unknown"
+    
+    StealState.active = true
+    StealState.startTime = tick()
+    StealState.phase = "holding"
+    StealState.label = lbl
+    
+    task.spawn(function()
+        local success = false
+        
+        -- Method 1: Try getconnections (original approach)
+        local holdConns = {}
+        local triggerConns = {}
+        
+        local ok1, conns1 = pcall(getconnections, prompt.PromptButtonHoldBegan)
+        if ok1 and type(conns1) == "table" then
+            for _, conn in ipairs(conns1) do
+                if type(conn.Function) == "function" then
+                    table.insert(holdConns, conn.Function)
+                end
+            end
+        end
+        
+        local ok2, conns2 = pcall(getconnections, prompt.Triggered)
+        if ok2 and type(conns2) == "table" then
+            for _, conn in ipairs(conns2) do
+                if type(conn.Function) == "function" then
+                    table.insert(triggerConns, conn.Function)
+                end
+            end
+        end
+        
+        -- Hold phase
+        if #holdConns > 0 then
+            for _, fn in ipairs(holdConns) do
+                task.spawn(fn)
+            end
+        end
+        
+        task.wait(CONFIG.HOLD_MIN)
+        StealState.phase = "waitingRange"
+        
+        -- Wait for range or timeout
+        local startTime = tick()
+        local inRange = false
+        
+        while tick() - startTime < CONFIG.HOLD_MAX do
+            if distToAnimal(animalData) <= CONFIG.STEAL_RANGE then
+                inRange = true
+                break
+            end
+            task.wait(0.02)
+        end
+        
+        if inRange then
+            task.wait(CONFIG.ENTRY_DELAY)
+            
+            -- Try trigger methods
+            if #triggerConns > 0 then
+                for _, fn in ipairs(triggerConns) do
+                    task.spawn(fn)
+                end
+                success = true
+            elseif type(fireproximityprompt) == "function" then
+                -- Method 2: fireproximityprompt
+                pcall(fireproximityprompt, prompt, 1)
+                success = true
+            else
+                -- Method 3: Try to find and fire the remote event
+                local remote = S.ReplicatedStorage:FindFirstChild("ProximityPromptService") or
+                              S.ReplicatedStorage:FindFirstChild("PromptService") or
+                              S.ReplicatedStorage:FindFirstChild("InteractionService")
+                
+                if remote then
+                    pcall(remote.FireServer, remote, prompt)
+                    success = true
+                else
+                    -- Method 4: Try firing PromptTriggered remote
+                    local triggerRemote = S.ReplicatedStorage:FindFirstChild("PromptTriggered")
+                    if triggerRemote and triggerRemote:IsA("RemoteEvent") then
+                        pcall(triggerRemote.FireServer, triggerRemote, prompt)
+                        success = true
+                    end
+                end
+            end
+        end
+        
+        -- Update state
+        if success then
+            StealState.totalSteals = StealState.totalSteals + 1
+            StealState.lastResult = "Stole " .. lbl
+        else
+            StealState.failedSteals = StealState.failedSteals + 1
+            StealState.lastResult = "Missed: " .. lbl
+        end
+        
+        StealState.active = false
+        StealState.phase = "idle"
+        StealState.lastResultTime = tick()
+        
+        task.wait(CONFIG.COOLDOWN)
+        isStealing = false
+    end)
+    
+    return true
+end
+
+local function attemptSteal(prompt, animalData)
+    if not prompt or not prompt.Parent then return false end
+    if isStealing then return false end
+    return executeSteal(prompt, animalData)
+end
+
+-- ─── FIXED: Better Animal Scanner ──────────────────────────────────────────
+local function scanAllPlots()
     local newCache = {}
     local count = 0
     
@@ -227,7 +362,8 @@ local function scanAllPlots()
                                 name = animalInfo.DisplayName or animalData.Index,
                                 plot = plot.Name,
                                 slot = tostring(slot),
-                                uid  = plot.Name .. "_" .. tostring(slot),
+                                uid = plot.Name .. "_" .. tostring(slot),
+                                index = animalData.Index,
                             }
                         end
                     end
@@ -240,125 +376,7 @@ local function scanAllPlots()
     return count
 end
 
--- ─── Optimized Steal Engine ──────────────────────────────────────────────
-local function buildStealCallbacks(prompt)
-    if InternalStealCache[prompt] then return end
-    local data = { holdCallbacks={}, triggerCallbacks={}, ready=true }
- 
-    local ok1, conns1 = pcall(getconnections, prompt.PromptButtonHoldBegan)
-    if ok1 and type(conns1)=="table" then
-        for _, conn in ipairs(conns1) do
-            if type(conn.Function)=="function" then table.insert(data.holdCallbacks, conn.Function) end
-        end
-    end
- 
-    local ok2, conns2 = pcall(getconnections, prompt.Triggered)
-    if ok2 and type(conns2)=="table" then
-        for _, conn in ipairs(conns2) do
-            if type(conn.Function)=="function" then table.insert(data.triggerCallbacks, conn.Function) end
-        end
-    end
- 
-    data.hasNativeCallbacks = (#data.holdCallbacks > 0) or (#data.triggerCallbacks > 0)
-    InternalStealCache[prompt] = data
-end
-
-local function executeStealAsync(prompt, animalData)
-    local data = InternalStealCache[prompt]
-    if not data or not data.ready then return false end
-    data.ready = false
- 
-    local lbl = animalData.name or "Unknown"
-    StealState.active    = true
-    StealState.startTime = tick()
-    StealState.phase     = "holding"
-    StealState.label     = lbl
-    
-    -- Run steal in a separate coroutine for better performance
-    stealCoroutine = coroutine.create(function()
-        -- Hold phase
-        if data.hasNativeCallbacks then
-            for _, fn in ipairs(data.holdCallbacks) do
-                task.spawn(fn)
-            end
-        end
- 
-        task.wait(CONFIG.HOLD_MIN)
-        StealState.phase = "waitingRange"
- 
-        local startTime = StealState.startTime
-        local fired = false
- 
-        -- Fast range checking loop
-        while tick() - startTime < CONFIG.HOLD_MAX do
-            if not prompt.Parent then break end
-            
-            -- Quick position check using cached positions
-            local pos = getAnimalPosition(animalData)
-            if pos then
-                local char = S.LocalPlayer.Character
-                if char then
-                    local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
-                    if hrp and (hrp.Position - pos).Magnitude <= CONFIG.STEAL_RANGE then
-                        task.wait(CONFIG.ENTRY_DELAY)
-                        
-                        -- Fire all available methods
-                        if data.hasNativeCallbacks and #data.triggerCallbacks > 0 then
-                            for _, fn in ipairs(data.triggerCallbacks) do
-                                task.spawn(fn)
-                            end
-                            fired = true
-                        elseif type(fireproximityprompt) == "function" then
-                            pcall(fireproximityprompt, prompt)
-                            fired = true
-                        else
-                            -- Try RemoteEvent fallback
-                            for _, v in ipairs(S.ReplicatedStorage:GetDescendants()) do
-                                if v:IsA("RemoteEvent") and 
-                                   (v.Name:lower():find("prompt") or v.Name:lower():find("steal")) then
-                                    pcall(v.FireServer, v, prompt)
-                                    fired = true
-                                    break
-                                end
-                            end
-                        end
-                        break
-                    end
-                end
-            end
-            task.wait(0.02)  -- Very fast checking
-        end
- 
-        -- Final result handling
-        if fired then
-            StealState.totalSteals = StealState.totalSteals + 1
-            StealState.lastResult  = "Stole " .. lbl
-        else
-            StealState.failedSteals = StealState.failedSteals + 1
-            StealState.lastResult   = "Missed: " .. lbl
-        end
- 
-        StealState.active        = false
-        StealState.phase         = "idle"
-        StealState.lastResultTime = tick()
- 
-        task.wait(CONFIG.COOLDOWN)
-        data.ready = true
-        stealCoroutine = nil
-    end)
-    
-    coroutine.resume(stealCoroutine)
-    return true
-end
-
-local function attemptSteal(prompt, animalData)
-    if not prompt or not prompt.Parent then return false end
-    buildStealCallbacks(prompt)
-    if not InternalStealCache[prompt] then return false end
-    return executeStealAsync(prompt, animalData)
-end
-
--- ─── Optimized Closest Animal Finder ─────────────────────────────────────
+-- ─── FIXED: Better Closest Animal Finder ──────────────────────────────────
 local function pickClosest()
     local char = S.LocalPlayer.Character
     if not char then return nil end
@@ -368,15 +386,14 @@ local function pickClosest()
     local charPos = hrp.Position
     local best, bestDist = nil, CONFIG.PRIME_RANGE
     
-    -- First check if we have cached positions
-    for _, a in ipairs(allAnimalsCache) do
-        if not isMyBaseAnimal(a) then
-            local pos = getAnimalPosition(a)
+    for _, animal in ipairs(allAnimalsCache) do
+        if not isMyBaseAnimal(animal) then
+            local pos = getAnimalPosition(animal)
             if pos then
-                local d = (charPos - pos).Magnitude
-                if d < bestDist then
-                    bestDist = d
-                    best = a
+                local dist = (charPos - pos).Magnitude
+                if dist < bestDist then
+                    bestDist = dist
+                    best = animal
                 end
             end
         end
@@ -385,24 +402,21 @@ local function pickClosest()
     return best
 end
 
--- ─── Auto Steal Controller ──────────────────────────────────────────────
+-- ─── Auto Steal Controller ─────────────────────────────────────────────────
 local function startAutoSteal()
     if stealConnection then return end
     
     stealConnection = S.RunService.Heartbeat:Connect(function()
-        if not CONFIG.AUTO_STEAL_ENABLED or StealState.active or stealCoroutine then 
-            return 
-        end
+        if not CONFIG.AUTO_STEAL_ENABLED then return end
+        if StealState.active or isStealing then return end
         
         local target = pickClosest()
-        if target then
-            local prompt = PromptMemoryCache[target.uid]
-            if not prompt or not prompt.Parent then 
-                prompt = findProximityPromptForAnimal(target) 
-            end
-            if prompt then 
-                attemptSteal(prompt, target) 
-            end
+        if not target then return end
+        
+        -- Find prompt
+        local prompt = findProximityPromptForAnimal(target)
+        if prompt then
+            attemptSteal(prompt, target)
         end
     end)
 end
@@ -412,12 +426,9 @@ local function stopAutoSteal()
         stealConnection:Disconnect()
         stealConnection = nil
     end
-    if stealCoroutine then
-        stealCoroutine = nil
-    end
 end
 
--- ─── Position Persistence ────────────────────────────────────────────────────
+-- ─── Position Persistence ───────────────────────────────────────────────────
 local function loadSavedPos()
     local ok, raw = pcall(readfile, SAVE_FILE)
     if ok and raw and raw ~= "" then
@@ -475,7 +486,7 @@ local function createUI()
 
     local savedX, savedY = loadSavedPos()
     
-    -- ── Main Card ──
+    -- Main Card
     local card = Instance.new("Frame")
     card.Name = "Card"
     card.Size = UDim2.new(0, 248, 0, 152)
@@ -493,15 +504,7 @@ local function createUI()
         card.Position = UDim2.new(0.5, 0, 0, 100)
     end
 
-    local cGrad = Instance.new("UIGradient")
-    cGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, THEME.bg),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 10, 16)),
-    })
-    cGrad.Rotation = 135
-    cGrad.Parent = card
-
-    -- ── Header ──
+    -- Header
     local header = Instance.new("Frame")
     header.Size = UDim2.new(1, 0, 0, 32)
     header.BackgroundColor3 = THEME.header
@@ -521,16 +524,8 @@ local function createUI()
     titleLbl.Font = Enum.Font.GothamBold
     titleLbl.TextXAlignment = Enum.TextXAlignment.Left
     titleLbl.Parent = header
-    
-    local tGrad = Instance.new("UIGradient")
-    tGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, THEME.accent),
-        ColorSequenceKeypoint.new(0.5, THEME.accent2),
-        ColorSequenceKeypoint.new(1, THEME.accent),
-    })
-    tGrad.Parent = titleLbl
 
-    -- ── Close Button ──
+    -- Close Button
     local closeBtn = Instance.new("TextButton")
     closeBtn.Size = UDim2.new(0, 22, 0, 22)
     closeBtn.Position = UDim2.new(1, -26, 0.5, -11)
@@ -544,7 +539,7 @@ local function createUI()
     closeBtn.Parent = header
     mkCorner(closeBtn, 6)
 
-    -- ── Body ──
+    -- Body
     local body = Instance.new("Frame")
     body.Name = "Body"
     body.Size = UDim2.new(1, 0, 1, -32)
@@ -552,7 +547,7 @@ local function createUI()
     body.BackgroundTransparency = 1
     body.Parent = card
 
-    -- Row 1: AUTO STEAL toggle
+    -- Toggle
     local row1 = Instance.new("Frame")
     row1.Size = UDim2.new(1, -16, 0, 28)
     row1.Position = UDim2.new(0, 8, 0, 6)
@@ -600,41 +595,32 @@ local function createUI()
         if CONFIG.AUTO_STEAL_ENABLED then startAutoSteal() else stopAutoSteal() end
     end)
 
-    -- ── Drag System ──
-    local function makeDraggable(frame)
-        local dragging, dragStart, dragPos = false, nil, nil
-        
-        frame.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 then
-                dragging = true
-                dragStart = input.Position
-                dragPos = frame.Position
-                input.Changed:Connect(function()
-                    if input.UserInputState == Enum.UserInputState.End then
-                        dragging = false
-                    end
-                end)
-            end
-        end)
-        
-        S.UserInputService.InputChanged:Connect(function(input)
-            if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
-                local delta = input.Position - dragStart
-                frame.Position = UDim2.new(0, dragPos.X.Offset + delta.X, 0, dragPos.Y.Offset + delta.Y)
-            end
-        end)
-        
-        S.UserInputService.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 and dragging then
-                dragging = false
-                savePos(frame.AbsolutePosition.X, frame.AbsolutePosition.Y)
-            end
-        end)
-    end
+    -- Drag System
+    local dragging, dragStart, dragPos = false, nil, nil
     
-    makeDraggable(card)
+    card.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            dragPos = card.Position
+        end
+    end)
+    
+    S.UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            card.Position = UDim2.new(0, dragPos.X.Offset + delta.X, 0, dragPos.Y.Offset + delta.Y)
+        end
+    end)
+    
+    S.UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 and dragging then
+            dragging = false
+            savePos(card.AbsolutePosition.X, card.AbsolutePosition.Y)
+        end
+    end)
 
-    -- ── Status Bar ──
+    -- Status Bar
     local bar = Instance.new("Frame")
     bar.Size = UDim2.new(1,-16, 0, 26)
     bar.Position = UDim2.new(0, 8, 0, 70)
@@ -661,13 +647,6 @@ local function createUI()
     fill.BorderSizePixel = 0
     fill.Parent = inner
     mkCorner(fill, 9)
-    
-    local fGrad = Instance.new("UIGradient")
-    fGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, THEME.accent),
-        ColorSequenceKeypoint.new(1, THEME.accent2),
-    })
-    fGrad.Parent = fill
 
     local dot = Instance.new("Frame")
     dot.Size = UDim2.new(0,5,0,5)
@@ -692,7 +671,7 @@ local function createUI()
     statusLbl.ZIndex = 3
     statusLbl.Parent = inner
 
-    -- ── Discord Watermark ──
+    -- Discord Watermark
     local discordLbl = Instance.new("TextLabel")
     discordLbl.Size = UDim2.new(1,0,0,14)
     discordLbl.Position = UDim2.new(0,0,1,-16)
@@ -706,7 +685,7 @@ local function createUI()
     discordLbl.ZIndex = 5
     discordLbl.Parent = card
 
-    -- ── Animation Loop ──
+    -- Animation Loop
     local lastFillPct = 0
     S.RunService.RenderStepped:Connect(function(dt)
         local on = CONFIG.AUTO_STEAL_ENABLED
@@ -756,7 +735,7 @@ local function createUI()
             or Color3.fromRGB(70,50,65)
     end)
 
-    -- ── Mini Pill ──
+    -- Mini Pill
     local pill = Instance.new("Frame")
     pill.Name = "Pill"
     pill.Size = UDim2.new(0, 220, 0, 36)
@@ -777,27 +756,43 @@ local function createUI()
     pillNameLbl.Font = Enum.Font.GothamBold
     pillNameLbl.TextXAlignment = Enum.TextXAlignment.Center
     pillNameLbl.Parent = pill
-    
-    local pGrad = Instance.new("UIGradient")
-    pGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, THEME.accent),
-        ColorSequenceKeypoint.new(0.5, THEME.accent2),
-        ColorSequenceKeypoint.new(1, THEME.accent),
-    })
-    pGrad.Parent = pillNameLbl
 
     local pillDiscordLbl = Instance.new("TextLabel")
     pillDiscordLbl.Size = UDim2.new(1, 0, 0, 14)
     pillDiscordLbl.Position = UDim2.new(0, 0, 0, 18)
     pillDiscordLbl.BackgroundTransparency = 1
     pillDiscordLbl.Text = "discord.gg/9QsSqQ3aRM"
-    pillDiscordLbl.TextColor3 = THEME.dim    pillDiscordLbl.TextSize = 9
+    pillDiscordLbl.TextColor3 = THEME.dim
+    pillDiscordLbl.TextSize = 9
     pillDiscordLbl.Font = Enum.Font.Gotham
     pillDiscordLbl.TextXAlignment = Enum.TextXAlignment.Center
     pillDiscordLbl.TextTransparency = 0.2
     pillDiscordLbl.Parent = pill
 
-    makeDraggable(pill)
+    -- Pill drag
+    local pillDragging, pillDragStart, pillDragPos = false, nil, nil
+    
+    pill.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            pillDragging = true
+            pillDragStart = input.Position
+            pillDragPos = pill.Position
+        end
+    end)
+    
+    S.UserInputService.InputChanged:Connect(function(input)
+        if pillDragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - pillDragStart
+            pill.Position = UDim2.new(0, pillDragPos.X.Offset + delta.X, 0, pillDragPos.Y.Offset + delta.Y)
+        end
+    end)
+    
+    S.UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 and pillDragging then
+            pillDragging = false
+            savePos(pill.AbsolutePosition.X, pill.AbsolutePosition.Y)
+        end
+    end)
 
     local pillOpen = Instance.new("TextButton")
     pillOpen.Size = UDim2.new(1,0,1,0)
@@ -806,7 +801,7 @@ local function createUI()
     pillOpen.ZIndex = 5
     pillOpen.Parent = pill
 
-    -- ── Close/Open Logic ──
+    -- Close/Open Logic
     local isOpen = true
 
     local function closeUI()
@@ -834,7 +829,7 @@ end
 
 -- ─── Boot ────────────────────────────────────────────────────────────────────
 task.spawn(function()
-    while task.wait(2) do 
+    while task.wait(3) do 
         scanAllPlots() 
     end
 end)
