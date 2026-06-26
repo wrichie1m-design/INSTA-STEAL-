@@ -1,43 +1,47 @@
+-- ╔══════════════════════════════════════════╗
+-- ║       Richie Hub Auto Grab               ║
+-- ║       discord.gg/9QsSqQ3aRM             ║
+-- ╚══════════════════════════════════════════╝
+ 
 local CONFIG = {
     AUTO_STEAL_ENABLED = true,
-    HOLD_MIN = 0.1,   -- was 1.3
-    HOLD_MAX = 0.2,   -- was 2.6
-    ENTRY_DELAY = 0.01, -- was 0.3
-    COOLDOWN = 0.01,  -- was 0.05
+    HOLD_MIN    = 0.4,
+    HOLD_MAX    = 0.9,
+    ENTRY_DELAY = 0.05,
+    COOLDOWN    = 0.02,
     STEAL_RANGE = 25,
     PRIME_RANGE = 80,
 }
  
+local SAVE_FILE = "RichieHub_pos.json"
+ 
+-- ─── Services ────────────────────────────────────────────────────────────────
 local S = {
-    Players = game:GetService("Players"),
-    ReplicatedStorage = game:GetService("ReplicatedStorage"),
-    RunService = game:GetService("RunService"),
+    Players          = game:GetService("Players"),
+    ReplicatedStorage= game:GetService("ReplicatedStorage"),
+    RunService       = game:GetService("RunService"),
     UserInputService = game:GetService("UserInputService"),
-    TweenService = game:GetService("TweenService"),
+    TweenService     = game:GetService("TweenService"),
 }
- 
-local Packages = S.ReplicatedStorage:WaitForChild("Packages")
-local Datas = S.ReplicatedStorage:WaitForChild("Datas")
- 
-local AnimalsData = require(Datas:WaitForChild("Animals"))
- 
 S.LocalPlayer = S.Players.LocalPlayer
  
 local plots = workspace:WaitForChild("Plots")
+ 
+-- ─── Sync layer ──────────────────────────────────────────────────────────────
+local Packages   = S.ReplicatedStorage:WaitForChild("Packages")
+local Datas      = S.ReplicatedStorage:WaitForChild("Datas")
+local AnimalsData= require(Datas:WaitForChild("Animals"))
  
 local syncRemotes = (function()
     local folder = Packages:WaitForChild("Synchronizer")
     return {
         channelFolder = folder:WaitForChild("Channel"),
-        routeRemote = folder:WaitForChild("CommunicationRoute"),
-        requestData = folder:FindFirstChild("RequestData"),
+        routeRemote   = folder:WaitForChild("CommunicationRoute"),
+        requestData   = folder:FindFirstChild("RequestData"),
     }
 end)()
  
-local plotAnimalSync = {
-    caches = {},
-    connections = {},
-}
+local plotAnimalSync = { caches = {}, connections = {} }
  
 local function splitSyncPath(path)
     if typeof(path) == "table" then return path end
@@ -49,12 +53,10 @@ local function splitSyncPath(path)
 end
  
 local function resolveSyncPath(path, root)
-    local current = root
-    local parent = nil
-    local key = nil
+    local current, parent, key = root, nil, nil
     for _, part in ipairs(splitSyncPath(path)) do
-        parent = current
-        key = part
+        parent  = current
+        key     = part
         current = current and current[part] or nil
     end
     return current, parent, key
@@ -65,16 +67,11 @@ local function applyPlotSyncDiff(channelName, packet)
     if typeof(cache) ~= "table" then return end
     local path, action, a, b = packet[1], packet[2], packet[3], packet[4]
     local current, parent, key = resolveSyncPath(path, cache)
-    if action == "Changed" then
-        if parent ~= nil then parent[key] = a end
-    elseif action == "ArrayInsert" then
-        if current ~= nil then table.insert(current, b, a) end
-    elseif action == "ArrayRemoved" then
-        if current ~= nil then table.remove(current, b) end
-    elseif action == "DictionaryInsert" then
-        if current ~= nil then current[b] = a end
-    elseif action == "DictionaryRemoved" then
-        if current ~= nil then current[b] = nil end
+    if     action == "Changed"           then if parent  then parent[key]     = a   end
+    elseif action == "ArrayInsert"       then if current then table.insert(current, b, a) end
+    elseif action == "ArrayRemoved"      then if current then table.remove(current, b)    end
+    elseif action == "DictionaryInsert"  then if current then current[b]      = a   end
+    elseif action == "DictionaryRemoved" then if current then current[b]      = nil end
     end
 end
  
@@ -83,21 +80,13 @@ local function attachPlotChannel(remote)
     local channelName = tostring(remote.Name)
     if not plots:FindFirstChild(channelName) then return end
     if syncRemotes.requestData and plotAnimalSync.caches[channelName] == nil then
-        local ok, data = pcall(function()
-            return syncRemotes.requestData:InvokeServer(channelName)
-        end)
-        if ok and typeof(data) == "table" then
-            plotAnimalSync.caches[channelName] = data
-        else
-            plotAnimalSync.caches[channelName] = {}
-        end
+        local ok, data = pcall(function() return syncRemotes.requestData:InvokeServer(channelName) end)
+        plotAnimalSync.caches[channelName] = (ok and typeof(data) == "table") and data or {}
     elseif plotAnimalSync.caches[channelName] == nil then
         plotAnimalSync.caches[channelName] = {}
     end
     plotAnimalSync.connections[remote] = remote.OnClientEvent:Connect(function(queue)
-        for _, packet in ipairs(queue) do
-            applyPlotSyncDiff(channelName, packet)
-        end
+        for _, packet in ipairs(queue) do applyPlotSyncDiff(channelName, packet) end
     end)
 end
  
@@ -113,14 +102,10 @@ local function detachPlotChannel(channelName)
 end
  
 for _, child in ipairs(syncRemotes.channelFolder:GetChildren()) do
-    if child:IsA("RemoteEvent") then
-        attachPlotChannel(child)
-    end
+    if child:IsA("RemoteEvent") then attachPlotChannel(child) end
 end
 syncRemotes.channelFolder.ChildAdded:Connect(function(child)
-    if child:IsA("RemoteEvent") then
-        attachPlotChannel(child)
-    end
+    if child:IsA("RemoteEvent") then attachPlotChannel(child) end
 end)
 syncRemotes.routeRemote.OnClientEvent:Connect(function(actions)
     for _, action in ipairs(actions) do
@@ -128,43 +113,33 @@ syncRemotes.routeRemote.OnClientEvent:Connect(function(actions)
         if not plots:FindFirstChild(channelName) then continue end
         if kind == "ListenerAdded" then
             local remote = syncRemotes.channelFolder:FindFirstChild(channelName)
-            if remote and remote:IsA("RemoteEvent") then
-                attachPlotChannel(remote)
-            end
+            if remote and remote:IsA("RemoteEvent") then attachPlotChannel(remote) end
         elseif kind == "ListenerRemoved" then
             detachPlotChannel(channelName)
         end
     end
 end)
  
-local function getPlotChannelData(plotName)
-    return plotAnimalSync.caches[plotName]
-end
+local function getPlotChannelData(plotName) return plotAnimalSync.caches[plotName] end
  
-local allAnimalsCache = {}
-local PromptMemoryCache = {}
-local InternalStealCache = {}
-local stealConnection = nil
+-- ─── State ───────────────────────────────────────────────────────────────────
+local allAnimalsCache  = {}
+local PromptMemoryCache= {}
+local InternalStealCache={}
+local stealConnection  = nil
  
 local StealState = {
-    active = false,
-    startTime = 0,
-    phase = "idle",
-    label = "",
-    lastResult = "",
-    lastResultTime = 0,
-    totalSteals = 0,
-    failedSteals = 0,
+    active=false, startTime=0, phase="idle", label="",
+    lastResult="", lastResultTime=0, totalSteals=0, failedSteals=0,
 }
  
+-- ─── Helpers ─────────────────────────────────────────────────────────────────
 local function getPlotOwner(plot)
-    local sign = plot:FindFirstChild("PlotSign")
+    local sign  = plot:FindFirstChild("PlotSign")
     local frame = sign and sign:FindFirstChild("SurfaceGui") and sign.SurfaceGui:FindFirstChild("Frame")
-    local label = frame and frame:FindFirstChild("TextLabel")
-    if not label or label.Text == "Empty Base" then
-        return nil
-    end
-    return label.Text:gsub("'s [Bb]ase$", ""):gsub("%s+$", "")
+    local lbl   = frame and frame:FindFirstChild("TextLabel")
+    if not lbl or lbl.Text == "Empty Base" then return nil end
+    return lbl.Text:gsub("'s [Bb]ase$",""):gsub("%s+$","")
 end
  
 local function isMyBaseAnimal(animalData)
@@ -174,23 +149,21 @@ local function isMyBaseAnimal(animalData)
     return getPlotOwner(plot) == S.LocalPlayer.DisplayName
 end
  
+local function getPodium(animalData)
+    local plot    = workspace.Plots:FindFirstChild(animalData.plot)    if not plot    then return nil end
+    local podiums = plot:FindFirstChild("AnimalPodiums")               if not podiums then return nil end
+    return podiums:FindFirstChild(animalData.slot)
+end
+ 
 local function findProximityPromptForAnimal(animalData)
     if not animalData then return nil end
     local cached = PromptMemoryCache[animalData.uid]
     if cached and cached.Parent then return cached end
  
-    local plot = workspace.Plots:FindFirstChild(animalData.plot)
-    if not plot then return nil end
-    local podiums = plot:FindFirstChild("AnimalPodiums")
-    if not podiums then return nil end
-    local podium = podiums:FindFirstChild(animalData.slot)
-    if not podium then return nil end
-    local base = podium:FindFirstChild("Base")
-    if not base then return nil end
-    local spawn = base:FindFirstChild("Spawn")
-    if not spawn then return nil end
-    local attach = spawn:FindFirstChild("PromptAttachment")
-    if not attach then return nil end
+    local podium = getPodium(animalData)       if not podium then return nil end
+    local base   = podium:FindFirstChild("Base") if not base   then return nil end
+    local spawn  = base:FindFirstChild("Spawn")  if not spawn  then return nil end
+    local attach = spawn:FindFirstChild("PromptAttachment") if not attach then return nil end
  
     for _, p in ipairs(attach:GetChildren()) do
         if p:IsA("ProximityPrompt") then
@@ -202,19 +175,14 @@ local function findProximityPromptForAnimal(animalData)
 end
  
 local function getAnimalPosition(animalData)
-    local plot = workspace.Plots:FindFirstChild(animalData.plot)
-    if not plot then return nil end
-    local podiums = plot:FindFirstChild("AnimalPodiums")
-    if not podiums then return nil end
-    local podium = podiums:FindFirstChild(animalData.slot)
-    if not podium then return nil end
-    return podium:GetPivot().Position
+    local podium = getPodium(animalData)
+    return podium and podium:GetPivot().Position or nil
 end
  
 local function distToAnimal(animalData)
-    local character = S.LocalPlayer.Character
-    if not character then return math.huge end
-    local hrp = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso")
+    local char = S.LocalPlayer.Character
+    if not char then return math.huge end
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
     if not hrp then return math.huge end
     local pos = getAnimalPosition(animalData)
     if not pos then return math.huge end
@@ -222,51 +190,75 @@ local function distToAnimal(animalData)
 end
  
 local function pickClosest()
-    local character = S.LocalPlayer.Character
-    if not character then return nil end
-    local hrp = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("UpperTorso")
+    local char = S.LocalPlayer.Character
+    if not char then return nil end
+    local hrp = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso")
     if not hrp then return nil end
- 
     local best, bestDist = nil, math.huge
-    for _, animalData in ipairs(allAnimalsCache) do
-        if isMyBaseAnimal(animalData) then continue end
-        local pos = getAnimalPosition(animalData)
+    for _, a in ipairs(allAnimalsCache) do
+        if isMyBaseAnimal(a) then continue end
+        local pos = getAnimalPosition(a)
         if not pos then continue end
-        local dist = (hrp.Position - pos).Magnitude
-        if dist > CONFIG.PRIME_RANGE then continue end
-        if dist < bestDist then
-            bestDist = dist
-            best = animalData
-        end
+        local d = (hrp.Position - pos).Magnitude
+        if d > CONFIG.PRIME_RANGE then continue end
+        if d < bestDist then bestDist=d; best=a end
     end
     return best
 end
  
+-- ─── Steal engine (multi-method for patched games) ───────────────────────────
+--  Method 1: getconnections callback fire (original approach)
+--  Method 2: fireproximityprompt (exploit function available in most executors)
+--  Method 3: FireServer on the remote directly
+ 
+local function tryFireMethod2(prompt)
+    -- fireproximityprompt is a common executor global
+    if type(fireproximityprompt) == "function" then
+        pcall(fireproximityprompt, prompt)
+        return true
+    end
+    return false
+end
+ 
+local function tryFireMethod3(prompt)
+    -- Try to fire the underlying RemoteEvent that ProximityPrompts use
+    local ok = pcall(function()
+        local remote = S.ReplicatedStorage:FindFirstChild("ProximityPrompts")
+            or S.ReplicatedStorage:FindFirstChild("PromptService")
+        -- fallback: iterate children for the trigger remote
+        if not remote then
+            for _, v in ipairs(S.ReplicatedStorage:GetDescendants()) do
+                if v:IsA("RemoteEvent") and (v.Name:lower():find("prompt") or v.Name:lower():find("steal")) then
+                    v:FireServer(prompt)
+                    break
+                end
+            end
+        end
+    end)
+    return ok
+end
+ 
 local function buildStealCallbacks(prompt)
     if InternalStealCache[prompt] then return end
-    local data = { holdCallbacks = {}, triggerCallbacks = {}, ready = true }
+    local data = { holdCallbacks={}, triggerCallbacks={}, ready=true }
  
     local ok1, conns1 = pcall(getconnections, prompt.PromptButtonHoldBegan)
-    if ok1 and type(conns1) == "table" then
+    if ok1 and type(conns1)=="table" then
         for _, conn in ipairs(conns1) do
-            if type(conn.Function) == "function" then
-                table.insert(data.holdCallbacks, conn.Function)
-            end
+            if type(conn.Function)=="function" then table.insert(data.holdCallbacks, conn.Function) end
         end
     end
  
     local ok2, conns2 = pcall(getconnections, prompt.Triggered)
-    if ok2 and type(conns2) == "table" then
+    if ok2 and type(conns2)=="table" then
         for _, conn in ipairs(conns2) do
-            if type(conn.Function) == "function" then
-                table.insert(data.triggerCallbacks, conn.Function)
-            end
+            if type(conn.Function)=="function" then table.insert(data.triggerCallbacks, conn.Function) end
         end
     end
  
-    if (#data.holdCallbacks > 0) or (#data.triggerCallbacks > 0) then
-        InternalStealCache[prompt] = data
-    end
+    -- Always store so method 2/3 can still fire even if getconnections returned nothing
+    data.hasNativeCallbacks = (#data.holdCallbacks > 0) or (#data.triggerCallbacks > 0)
+    InternalStealCache[prompt] = data
 end
  
 local function executeStealAsync(prompt, animalData)
@@ -274,45 +266,63 @@ local function executeStealAsync(prompt, animalData)
     if not data or not data.ready then return false end
     data.ready = false
  
-    local label = animalData.name or "Animal"
-    StealState.active = true
+    local lbl = animalData.name or "Brainrot"
+    StealState.active    = true
     StealState.startTime = tick()
-    StealState.phase = "holding"
-    StealState.label = label
+    StealState.phase     = "holding"
+    StealState.label     = lbl
  
     task.spawn(function()
-        for _, fn in ipairs(data.holdCallbacks) do task.spawn(fn) end
+        -- Phase 1: hold begin
+        if data.hasNativeCallbacks then
+            for _, fn in ipairs(data.holdCallbacks) do task.spawn(fn) end
+        end
  
         task.wait(CONFIG.HOLD_MIN)
- 
         StealState.phase = "waitingRange"
  
         local alreadyInRange = distToAnimal(animalData) <= CONFIG.STEAL_RANGE
         local fired = false
+ 
         while true do
             local elapsed = tick() - StealState.startTime
             if elapsed > CONFIG.HOLD_MAX then break end
             if not prompt.Parent then break end
             if distToAnimal(animalData) <= CONFIG.STEAL_RANGE then
                 if not alreadyInRange then task.wait(CONFIG.ENTRY_DELAY) end
-                for _, fn in ipairs(data.triggerCallbacks) do task.spawn(fn) end
-                fired = true
+ 
+                -- Try all methods in order
+                if data.hasNativeCallbacks and #data.triggerCallbacks > 0 then
+                    for _, fn in ipairs(data.triggerCallbacks) do task.spawn(fn) end
+                    fired = true
+                elseif tryFireMethod2(prompt) then
+                    fired = true
+                else
+                    tryFireMethod3(prompt)
+                    fired = true -- optimistic
+                end
                 break
             end
             task.wait()
         end
  
-        if fired then
-            StealState.totalSteals = StealState.totalSteals + 1
-            StealState.lastResult = "Stole " .. label
-        else
-            StealState.failedSteals = StealState.failedSteals + 1
-            StealState.lastResult = "Missed: " .. label
+        -- If native callbacks gave nothing but prompt exists, try method 2 anyway
+        if not fired and prompt.Parent then
+            fired = tryFireMethod2(prompt)
+            if not fired then tryFireMethod3(prompt); fired = true end
         end
  
-        StealState.active = false
-        StealState.phase = "idle"
-        StealState.lastResultTime = tick()
+        if fired then
+            StealState.totalSteals = StealState.totalSteals + 1
+            StealState.lastResult  = "Stole " .. lbl
+        else
+            StealState.failedSteals = StealState.failedSteals + 1
+            StealState.lastResult   = "Missed: " .. lbl
+        end
+ 
+        StealState.active        = false
+        StealState.phase         = "idle"
+        StealState.lastResultTime= tick()
  
         task.wait(CONFIG.COOLDOWN)
         data.ready = true
@@ -329,29 +339,24 @@ end
  
 local function scanAllPlots()
     local newCache = {}
- 
     for _, plot in ipairs(plots:GetChildren()) do
         local cache = getPlotChannelData(plot.Name)
         if not cache then continue end
         local animalList = cache.AnimalList
         if typeof(animalList) ~= "table" then continue end
- 
         for slot, animalData in pairs(animalList) do
             if type(animalData) == "table" then
-                local animalName = animalData.Index
-                local animalInfo = AnimalsData[animalName]
+                local animalInfo = AnimalsData[animalData.Index]
                 if not animalInfo then continue end
- 
                 table.insert(newCache, {
-                    name = animalInfo.DisplayName or animalName,
+                    name = animalInfo.DisplayName or animalData.Index,
                     plot = plot.Name,
                     slot = tostring(slot),
-                    uid = plot.Name .. "_" .. tostring(slot),
+                    uid  = plot.Name .. "_" .. tostring(slot),
                 })
             end
         end
     end
- 
     allAnimalsCache = newCache
     return #allAnimalsCache
 end
@@ -361,14 +366,10 @@ local function startAutoSteal()
     stealConnection = S.RunService.Heartbeat:Connect(function()
         if not CONFIG.AUTO_STEAL_ENABLED then return end
         if StealState.active then return end
- 
         local target = pickClosest()
         if not target then return end
- 
         local prompt = PromptMemoryCache[target.uid]
-        if not prompt or not prompt.Parent then
-            prompt = findProximityPromptForAnimal(target)
-        end
+        if not prompt or not prompt.Parent then prompt = findProximityPromptForAnimal(target) end
         if prompt then attemptSteal(prompt, target) end
     end)
 end
@@ -379,64 +380,81 @@ local function stopAutoSteal()
     stealConnection = nil
 end
  
--- ─── THEME ───────────────────────────────────────────────────────────────────
+-- ─── Position persistence ─────────────────────────────────────────────────────
+local function loadSavedPos()
+    local ok, raw = pcall(readfile, SAVE_FILE)
+    if ok and raw and raw ~= "" then
+        local ok2, t = pcall(game.HttpService and
+            function() return game:GetService("HttpService"):JSONDecode(raw) end
+            or function() return nil end)
+        if ok2 and t and t.x and t.y then
+            return t.x, t.y
+        end
+    end
+    return nil, nil
+end
+ 
+local function savePos(x, y)
+    pcall(function()
+        local json = ('{"x":%d,"y":%d}'):format(math.floor(x), math.floor(y))
+        writefile(SAVE_FILE, json)
+    end)
+end
+ 
+-- ─── Theme ───────────────────────────────────────────────────────────────────
 local THEME = {
-    bg      = Color3.fromRGB(45, 22, 35),
-    panel   = Color3.fromRGB(55, 28, 42),
+    bg      = Color3.fromRGB(28, 14, 22),
+    header  = Color3.fromRGB(50, 24, 38),
     accent  = Color3.fromRGB(255, 105, 180),
     accent2 = Color3.fromRGB(255, 182, 193),
     warn    = Color3.fromRGB(255, 180, 60),
     good    = Color3.fromRGB(255, 120, 200),
     bad     = Color3.fromRGB(255, 70, 100),
     text    = Color3.fromRGB(255, 228, 235),
-    dim     = Color3.fromRGB(180, 140, 160),
+    dim     = Color3.fromRGB(160, 120, 145),
+    border  = Color3.fromRGB(255, 105, 180),
 }
  
-local function corner(p, r)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, r or 6)
-    c.Parent = p
-end
+local function mkCorner(p, r) local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(0,r or 6); c.Parent=p end
+local function mkStroke(p, col, t) local s=Instance.new("UIStroke"); s.Color=col or THEME.border; s.Thickness=t or 1; s.Parent=p; return s end
  
-local function stroke(p, color, t)
-    local s = Instance.new("UIStroke")
-    s.Color = color or Color3.fromRGB(60, 60, 80)
-    s.Thickness = t or 1
-    s.Parent = p
-end
+-- ─── Drag helper: drags `card` when ANY part of `targets` list is held ────────
+local function makeFullDraggable(card, targets)
+    local dragging, dragStartMouse, dragStartCardPos = false, Vector2.new(), UDim2.new()
  
--- ─── DRAG (header-only, clean implementation) ─────────────────────────────
-local function makeDraggable(card, handle)
-    local dragging = false
-    local dragStartMouse = Vector2.new()
-    local dragStartCardPos = UDim2.new()
- 
-    handle.InputBegan:Connect(function(input)
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1
-        and input.UserInputType ~= Enum.UserInputType.Touch then return end
+    local function beginDrag(input)
         dragging = true
         dragStartMouse = Vector2.new(input.Position.X, input.Position.Y)
-        -- Normalise card to offset-only so math stays simple
         local abs = card.AbsolutePosition
         card.AnchorPoint = Vector2.new(0, 0)
         card.Position = UDim2.new(0, abs.X, 0, abs.Y)
         dragStartCardPos = card.Position
-    end)
+    end
+ 
+    for _, target in ipairs(targets) do
+        target.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+                beginDrag(input)
+            end
+        end)
+    end
  
     S.UserInputService.InputChanged:Connect(function(input)
         if not dragging then return end
         if input.UserInputType ~= Enum.UserInputType.MouseMovement
         and input.UserInputType ~= Enum.UserInputType.Touch then return end
         local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStartMouse
-        card.Position = UDim2.new(
-            0, dragStartCardPos.X.Offset + delta.X,
-            0, dragStartCardPos.Y.Offset + delta.Y
-        )
+        card.Position = UDim2.new(0, dragStartCardPos.X.Offset+delta.X, 0, dragStartCardPos.Y.Offset+delta.Y)
     end)
  
     S.UserInputService.InputEnded:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
         or input.UserInputType == Enum.UserInputType.Touch then
+            if dragging then
+                -- Auto-save position on drag release
+                savePos(card.AbsolutePosition.X, card.AbsolutePosition.Y)
+            end
             dragging = false
         end
     end)
@@ -448,113 +466,135 @@ local function createUI()
     if existing then existing:Destroy() end
  
     local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "RichieHubAutoGrab"
-    screenGui.ResetOnSpawn = false
+    screenGui.Name           = "RichieHubAutoGrab"
+    screenGui.ResetOnSpawn   = false
     screenGui.IgnoreGuiInset = true
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    screenGui.Parent = S.LocalPlayer:WaitForChild("PlayerGui")
+    screenGui.Parent         = S.LocalPlayer:WaitForChild("PlayerGui")
  
-    -- Card: 240 × 138 (was 320 × 172)
+    -- Load saved position
+    local savedX, savedY = loadSavedPos()
+ 
+    -- ── Main card ──
     local card = Instance.new("Frame")
-    card.Name = "Card"
-    card.Size = UDim2.new(0, 240, 0, 138)
-    card.Position = UDim2.new(0.5, 0, 0, 100)
-    card.AnchorPoint = Vector2.new(0.5, 0)
+    card.Name             = "Card"
+    card.Size             = UDim2.new(0, 248, 0, 152)
     card.BackgroundColor3 = THEME.bg
-    card.BorderSizePixel = 0
-    card.Parent = screenGui
-    corner(card, 10)
-    stroke(card, THEME.accent, 1.5)
+    card.BorderSizePixel  = 0
+    card.Parent           = screenGui
+    mkCorner(card, 11)
+    mkStroke(card, THEME.border, 1.5)
  
-    local cardGrad = Instance.new("UIGradient")
-    cardGrad.Color = ColorSequence.new({
+    if savedX and savedY then
+        card.AnchorPoint = Vector2.new(0, 0)
+        card.Position    = UDim2.new(0, savedX, 0, savedY)
+    else
+        card.AnchorPoint = Vector2.new(0.5, 0)
+        card.Position    = UDim2.new(0.5, 0, 0, 100)
+    end
+ 
+    -- Subtle gradient on card bg
+    local cGrad = Instance.new("UIGradient")
+    cGrad.Color    = ColorSequence.new({
         ColorSequenceKeypoint.new(0, THEME.bg),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(35, 18, 28)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 10, 16)),
     })
-    cardGrad.Rotation = 135
-    cardGrad.Parent = card
+    cGrad.Rotation = 135
+    cGrad.Parent   = card
  
-    -- Header: drag handle (30px tall, was 36)
+    -- ── Header ──
     local header = Instance.new("Frame")
-    header.Name = "Header"
-    header.Size = UDim2.new(1, 0, 0, 30)
-    header.BackgroundColor3 = Color3.fromRGB(65, 32, 48)
-    header.BackgroundTransparency = 0.3
-    header.BorderSizePixel = 0
-    header.Parent = card
-    corner(header, 10)
-    stroke(header, THEME.accent, 1)
+    header.Size                  = UDim2.new(1, 0, 0, 32)
+    header.BackgroundColor3      = THEME.header
+    header.BackgroundTransparency= 0.2
+    header.BorderSizePixel       = 0
+    header.Parent                = card
+    mkCorner(header, 11)
+    mkStroke(header, THEME.accent, 1)
  
-    -- Drag cursor hint (≡ icon on left)
-    local gripLbl = Instance.new("TextLabel")
-    gripLbl.Size = UDim2.new(0, 20, 1, 0)
-    gripLbl.Position = UDim2.new(0, 6, 0, 0)
-    gripLbl.BackgroundTransparency = 1
-    gripLbl.Text = "⠿"
-    gripLbl.TextColor3 = THEME.dim
-    gripLbl.TextSize = 12
-    gripLbl.Font = Enum.Font.Gotham
-    gripLbl.TextXAlignment = Enum.TextXAlignment.Left
-    gripLbl.Parent = header
- 
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, 0, 1, 0)
-    title.BackgroundTransparency = 1
-    title.Text = "Richie Hub Auto Grab"
-    title.TextColor3 = THEME.text
-    title.TextSize = 11
-    title.Font = Enum.Font.GothamBold
-    title.TextXAlignment = Enum.TextXAlignment.Center
-    title.Parent = header
- 
-    local titleGrad = Instance.new("UIGradient")
-    titleGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, THEME.accent),
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size               = UDim2.new(1, -32, 1, 0)
+    titleLbl.Position           = UDim2.new(0, 10, 0, 0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text               = "✦ Richie Hub Auto Grab"
+    titleLbl.TextColor3         = THEME.text
+    titleLbl.TextSize           = 11
+    titleLbl.Font               = Enum.Font.GothamBold
+    titleLbl.TextXAlignment     = Enum.TextXAlignment.Left
+    titleLbl.Parent             = header
+    -- Pink gradient on title
+    local tGrad = Instance.new("UIGradient")
+    tGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   THEME.accent),
         ColorSequenceKeypoint.new(0.5, THEME.accent2),
-        ColorSequenceKeypoint.new(1, THEME.accent),
+        ColorSequenceKeypoint.new(1,   THEME.accent),
     })
-    titleGrad.Parent = title
+    tGrad.Parent = titleLbl
+ 
+    -- ── Close button (X) ──
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size             = UDim2.new(0, 22, 0, 22)
+    closeBtn.Position         = UDim2.new(1, -26, 0.5, -11)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(60, 30, 48)
+    closeBtn.AutoButtonColor  = false
+    closeBtn.Text             = "✕"
+    closeBtn.TextColor3       = THEME.dim
+    closeBtn.TextSize         = 11
+    closeBtn.Font             = Enum.Font.GothamBold
+    closeBtn.ZIndex           = 10
+    closeBtn.Parent           = header
+    mkCorner(closeBtn, 6)
+ 
+    -- ── Body (everything below header) ──
+    local body = Instance.new("Frame")
+    body.Name             = "Body"
+    body.Size             = UDim2.new(1, 0, 1, -32)
+    body.Position         = UDim2.new(0, 0, 0, 32)
+    body.BackgroundTransparency = 1
+    body.Parent           = card
  
     -- Row 1: AUTO STEAL toggle
     local row1 = Instance.new("Frame")
-    row1.Size = UDim2.new(1, -16, 0, 26)
-    row1.Position = UDim2.new(0, 8, 0, 36)
-    row1.BackgroundTransparency = 1
-    row1.Parent = card
+    row1.Size                  = UDim2.new(1, -16, 0, 28)
+    row1.Position              = UDim2.new(0, 8, 0, 6)
+    row1.BackgroundTransparency= 1
+    row1.Parent                = body
  
     local lbl1 = Instance.new("TextLabel")
-    lbl1.Size = UDim2.new(0, 110, 1, 0)
+    lbl1.Size               = UDim2.new(0.55, 0, 1, 0)
     lbl1.BackgroundTransparency = 1
-    lbl1.Text = "AUTO STEAL"
-    lbl1.TextColor3 = THEME.text
-    lbl1.TextSize = 11
-    lbl1.Font = Enum.Font.GothamBold
-    lbl1.TextXAlignment = Enum.TextXAlignment.Left
-    lbl1.Parent = row1
+    lbl1.Text               = "AUTO STEAL"
+    lbl1.TextColor3         = THEME.text
+    lbl1.TextSize           = 11
+    lbl1.Font               = Enum.Font.GothamBold
+    lbl1.TextXAlignment     = Enum.TextXAlignment.Left
+    lbl1.Parent             = row1
  
     local tglBtn = Instance.new("TextButton")
-    tglBtn.Size = UDim2.new(0, 38, 0, 19)
-    tglBtn.Position = UDim2.new(1, -38, 0.5, -9)
-    tglBtn.AutoButtonColor = false
-    tglBtn.Text = ""
-    tglBtn.BackgroundColor3 = CONFIG.AUTO_STEAL_ENABLED and THEME.good or Color3.fromRGB(70, 40, 58)
-    tglBtn.Parent = row1
-    corner(tglBtn, 10)
+    tglBtn.Size             = UDim2.new(0, 40, 0, 20)
+    tglBtn.Position         = UDim2.new(1, -40, 0.5, -10)
+    tglBtn.AutoButtonColor  = false
+    tglBtn.Text             = ""
+    tglBtn.BackgroundColor3 = CONFIG.AUTO_STEAL_ENABLED and THEME.good or Color3.fromRGB(60, 35, 50)
+    tglBtn.Parent           = row1
+    mkCorner(tglBtn, 10)
  
     local tglKnob = Instance.new("Frame")
-    tglKnob.Size = UDim2.new(0, 15, 0, 15)
-    tglKnob.Position = CONFIG.AUTO_STEAL_ENABLED and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
-    tglKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    tglKnob.BorderSizePixel = 0
-    tglKnob.Parent = tglBtn
-    corner(tglKnob, 8)
+    tglKnob.Size             = UDim2.new(0, 16, 0, 16)
+    tglKnob.Position         = CONFIG.AUTO_STEAL_ENABLED
+                               and UDim2.new(1,-18,0.5,-8)
+                               or  UDim2.new(0,2,0.5,-8)
+    tglKnob.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    tglKnob.BorderSizePixel  = 0
+    tglKnob.Parent           = tglBtn
+    mkCorner(tglKnob, 8)
  
     local function updateToggleVisual()
         local on = CONFIG.AUTO_STEAL_ENABLED
         S.TweenService:Create(tglKnob, TweenInfo.new(0.12), {
-            Position = on and UDim2.new(1, -17, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)
+            Position = on and UDim2.new(1,-18,0.5,-8) or UDim2.new(0,2,0.5,-8)
         }):Play()
-        tglBtn.BackgroundColor3 = on and THEME.good or Color3.fromRGB(70, 40, 58)
+        tglBtn.BackgroundColor3 = on and THEME.good or Color3.fromRGB(60,35,50)
     end
  
     tglBtn.MouseButton1Click:Connect(function()
@@ -565,253 +605,327 @@ local function createUI()
  
     -- Row 2: RADIUS slider
     local row2 = Instance.new("Frame")
-    row2.Size = UDim2.new(1, -16, 0, 26)
-    row2.Position = UDim2.new(0, 8, 0, 66)
-    row2.BackgroundTransparency = 1
-    row2.Parent = card
+    row2.Size                  = UDim2.new(1,-16, 0, 28)
+    row2.Position              = UDim2.new(0, 8, 0, 38)
+    row2.BackgroundTransparency= 1
+    row2.Parent                = body
  
     local lbl2 = Instance.new("TextLabel")
-    lbl2.Size = UDim2.new(0, 60, 1, 0)
+    lbl2.Size               = UDim2.new(0, 55, 1, 0)
     lbl2.BackgroundTransparency = 1
-    lbl2.Text = "RADIUS"
-    lbl2.TextColor3 = THEME.text
-    lbl2.TextSize = 11
-    lbl2.Font = Enum.Font.GothamBold
-    lbl2.TextXAlignment = Enum.TextXAlignment.Left
-    lbl2.Parent = row2
+    lbl2.Text               = "RADIUS"
+    lbl2.TextColor3         = THEME.text
+    lbl2.TextSize           = 11
+    lbl2.Font               = Enum.Font.GothamBold
+    lbl2.TextXAlignment     = Enum.TextXAlignment.Left
+    lbl2.Parent             = row2
  
     local radVal = Instance.new("TextLabel")
-    radVal.Size = UDim2.new(0, 32, 1, 0)
-    radVal.Position = UDim2.new(1, -32, 0, 0)
+    radVal.Size             = UDim2.new(0, 30, 1, 0)
+    radVal.Position         = UDim2.new(1,-30, 0, 0)
     radVal.BackgroundTransparency = 1
-    radVal.Text = tostring(CONFIG.STEAL_RANGE)
-    radVal.TextColor3 = THEME.accent2
-    radVal.TextSize = 11
-    radVal.Font = Enum.Font.GothamBold
-    radVal.TextXAlignment = Enum.TextXAlignment.Right
-    radVal.Parent = row2
+    radVal.Text             = tostring(CONFIG.STEAL_RANGE)
+    radVal.TextColor3       = THEME.accent2
+    radVal.TextSize         = 11
+    radVal.Font             = Enum.Font.GothamBold
+    radVal.TextXAlignment   = Enum.TextXAlignment.Right
+    radVal.Parent           = row2
  
     local track = Instance.new("Frame")
-    track.Size = UDim2.new(1, -102, 0, 5)
-    track.Position = UDim2.new(0, 66, 0.5, -2)
-    track.BackgroundColor3 = Color3.fromRGB(40, 20, 32)
-    track.BorderSizePixel = 0
-    track.Parent = row2
-    corner(track, 100)
+    track.Size              = UDim2.new(1,-92, 0, 5)
+    track.Position          = UDim2.new(0, 60, 0.5,-2)
+    track.BackgroundColor3  = Color3.fromRGB(35, 18, 28)
+    track.BorderSizePixel   = 0
+    track.Parent            = row2
+    mkCorner(track, 100)
  
     local trackFill = Instance.new("Frame")
-    trackFill.Size = UDim2.new(0, 0, 1, 0)
-    trackFill.BackgroundColor3 = THEME.accent
+    trackFill.Size            = UDim2.new(0,0,1,0)
+    trackFill.BackgroundColor3= THEME.accent
     trackFill.BorderSizePixel = 0
-    trackFill.Parent = track
-    corner(trackFill, 100)
+    trackFill.Parent          = track
+    mkCorner(trackFill, 100)
  
-    local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0, 11, 0, 11)
-    knob.AnchorPoint = Vector2.new(0.5, 0.5)
-    knob.Position = UDim2.new(0, 0, 0.5, 0)
-    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    knob.BorderSizePixel = 0
-    knob.Parent = track
-    corner(knob, 100)
-    local ks = Instance.new("UIStroke")
-    ks.Color = THEME.accent
-    ks.Thickness = 1.5
-    ks.Parent = knob
+    local sliderKnob = Instance.new("Frame")
+    sliderKnob.Size             = UDim2.new(0,12,0,12)
+    sliderKnob.AnchorPoint      = Vector2.new(0.5,0.5)
+    sliderKnob.Position         = UDim2.new(0,0,0.5,0)
+    sliderKnob.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    sliderKnob.BorderSizePixel  = 0
+    sliderKnob.Parent           = track
+    mkCorner(sliderKnob, 100)
+    mkStroke(sliderKnob, THEME.accent, 1.5)
  
     local function updateRadius(px)
-        local maxW = track.AbsoluteSize.X
-        local clamped = math.clamp(px, 0, maxW)
-        local pct = clamped / maxW
-        CONFIG.STEAL_RANGE = math.floor(5 + (pct * 95))
-        radVal.Text = tostring(CONFIG.STEAL_RANGE)
-        trackFill.Size = UDim2.new(0, clamped, 1, 0)
-        knob.Position = UDim2.new(0, clamped, 0.5, 0)
+        local maxW   = track.AbsoluteSize.X
+        local clamped= math.clamp(px, 0, maxW)
+        local pct    = clamped / maxW
+        CONFIG.STEAL_RANGE        = math.floor(5 + pct * 95)
+        radVal.Text               = tostring(CONFIG.STEAL_RANGE)
+        trackFill.Size            = UDim2.new(0, clamped, 1, 0)
+        sliderKnob.Position       = UDim2.new(0, clamped, 0.5, 0)
     end
  
     task.defer(function()
         task.wait(0.1)
-        local maxW = track.AbsoluteSize.X
-        local pct = (CONFIG.STEAL_RANGE - 5) / 95
-        local clamped = pct * maxW
-        trackFill.Size = UDim2.new(0, clamped, 1, 0)
-        knob.Position = UDim2.new(0, clamped, 0.5, 0)
+        local maxW   = track.AbsoluteSize.X
+        local clamped= ((CONFIG.STEAL_RANGE - 5) / 95) * maxW
+        trackFill.Size      = UDim2.new(0, clamped, 1, 0)
+        sliderKnob.Position = UDim2.new(0, clamped, 0.5, 0)
     end)
  
     local draggingRad = false
     track.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
             draggingRad = true
             updateRadius(input.Position.X - track.AbsolutePosition.X)
         end
     end)
-    knob.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    sliderKnob.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
             draggingRad = true
         end
     end)
     S.UserInputService.InputChanged:Connect(function(input)
-        if draggingRad and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        if draggingRad and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
             updateRadius(input.Position.X - track.AbsolutePosition.X)
         end
     end)
     S.UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
             draggingRad = false
         end
     end)
  
     -- Status bar
     local bar = Instance.new("Frame")
-    bar.Name = "Bar"
-    bar.Size = UDim2.new(1, -16, 0, 24)
-    bar.Position = UDim2.new(0, 8, 0, 100)
-    bar.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
-    bar.BackgroundTransparency = 0.15
-    bar.Parent = card
-    corner(bar, 12)
- 
-    local barStroke = Instance.new("UIStroke")
-    barStroke.Color = Color3.fromRGB(80, 60, 75)
-    barStroke.Thickness = 1
-    barStroke.Transparency = 0.4
-    barStroke.Parent = bar
+    bar.Size              = UDim2.new(1,-16, 0, 26)
+    bar.Position          = UDim2.new(0, 8, 0, 70)
+    bar.BackgroundColor3  = Color3.fromRGB(14,8,12)
+    bar.BackgroundTransparency = 0.1
+    bar.BorderSizePixel   = 0
+    bar.Parent            = body
+    mkCorner(bar, 13)
+    local barStroke = mkStroke(bar, Color3.fromRGB(70,50,65), 1)
+    barStroke.Transparency = 0.5
  
     local inner = Instance.new("Frame")
-    inner.Size = UDim2.new(1, -12, 1, -8)
-    inner.Position = UDim2.new(0, 6, 0, 4)
-    inner.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
-    inner.BackgroundTransparency = 0.2
-    inner.BorderSizePixel = 0
-    inner.Parent = bar
-    corner(inner, 8)
+    inner.Size              = UDim2.new(1,-12, 1,-8)
+    inner.Position          = UDim2.new(0,6, 0,4)
+    inner.BackgroundColor3  = Color3.fromRGB(22,12,18)
+    inner.BackgroundTransparency = 0.15
+    inner.BorderSizePixel   = 0
+    inner.Parent            = bar
+    mkCorner(inner, 9)
  
     local fill = Instance.new("Frame")
-    fill.Size = UDim2.new(0, 0, 1, 0)
+    fill.Size             = UDim2.new(0,0,1,0)
     fill.BackgroundColor3 = THEME.accent
-    fill.BorderSizePixel = 0
-    fill.Parent = inner
-    corner(fill, 8)
- 
-    local fillGrad = Instance.new("UIGradient")
-    fillGrad.Color = ColorSequence.new({
+    fill.BorderSizePixel  = 0
+    fill.Parent           = inner
+    mkCorner(fill, 9)
+    local fGrad = Instance.new("UIGradient")
+    fGrad.Color  = ColorSequence.new({
         ColorSequenceKeypoint.new(0, THEME.accent),
         ColorSequenceKeypoint.new(1, THEME.accent2),
     })
-    fillGrad.Parent = fill
+    fGrad.Parent = fill
  
     local dot = Instance.new("Frame")
-    dot.Size = UDim2.new(0, 5, 0, 5)
-    dot.AnchorPoint = Vector2.new(0, 0.5)
-    dot.Position = UDim2.new(0, 8, 0.5, 0)
-    dot.BackgroundColor3 = Color3.fromRGB(80, 60, 70)
-    dot.BorderSizePixel = 0
-    dot.ZIndex = 3
-    dot.Parent = inner
-    corner(dot, 3)
+    dot.Size             = UDim2.new(0,5,0,5)
+    dot.AnchorPoint      = Vector2.new(0,0.5)
+    dot.Position         = UDim2.new(0,8,0.5,0)
+    dot.BackgroundColor3 = Color3.fromRGB(80,60,70)
+    dot.BorderSizePixel  = 0
+    dot.ZIndex           = 3
+    dot.Parent           = inner
+    mkCorner(dot, 3)
  
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1, -28, 1, 0)
-    label.Position = UDim2.new(0, 18, 0, 0)
-    label.BackgroundTransparency = 1
-    label.Text = "IDLE"
-    label.TextColor3 = Color3.fromRGB(160, 140, 150)
-    label.TextSize = 10
-    label.Font = Enum.Font.GothamBold
-    label.TextXAlignment = Enum.TextXAlignment.Center
-    label.TextTransparency = 0.2
-    label.ZIndex = 3
-    label.Parent = inner
+    local statusLbl = Instance.new("TextLabel")
+    statusLbl.Size               = UDim2.new(1,-28,1,0)
+    statusLbl.Position           = UDim2.new(0,18,0,0)
+    statusLbl.BackgroundTransparency = 1
+    statusLbl.Text               = "IDLE"
+    statusLbl.TextColor3         = THEME.dim
+    statusLbl.TextSize           = 10
+    statusLbl.Font               = Enum.Font.GothamBold
+    statusLbl.TextXAlignment     = Enum.TextXAlignment.Center
+    statusLbl.TextTransparency   = 0.2
+    statusLbl.ZIndex             = 3
+    statusLbl.Parent             = inner
  
-    -- Discord watermark across the bottom of the card
-    local discord = Instance.new("TextLabel")
-    discord.Size = UDim2.new(1, 0, 0, 14)
-    discord.Position = UDim2.new(0, 0, 1, -16)
-    discord.BackgroundTransparency = 1
-    discord.Text = "discord.gg/9QsSqQ3aRM"
-    discord.TextColor3 = THEME.dim
-    discord.TextSize = 9
-    discord.Font = Enum.Font.Gotham
-    discord.TextXAlignment = Enum.TextXAlignment.Center
-    discord.TextTransparency = 0.35
-    discord.ZIndex = 5
-    discord.Parent = card
- 
-    local discordGrad = Instance.new("UIGradient")
-    discordGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(100, 80, 120)),
+    -- Discord watermark across card bottom
+    local discordLbl = Instance.new("TextLabel")
+    discordLbl.Size               = UDim2.new(1,0,0,14)
+    discordLbl.Position           = UDim2.new(0,0,1,-16)
+    discordLbl.BackgroundTransparency = 1
+    discordLbl.Text               = "discord.gg/9QsSqQ3aRM"
+    discordLbl.TextColor3         = THEME.dim
+    discordLbl.TextSize           = 9
+    discordLbl.Font               = Enum.Font.Gotham
+    discordLbl.TextXAlignment     = Enum.TextXAlignment.Center
+    discordLbl.TextTransparency   = 0.3
+    discordLbl.ZIndex             = 5
+    discordLbl.Parent             = card
+    local dGrad = Instance.new("UIGradient")
+    dGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(100,80,120)),
         ColorSequenceKeypoint.new(0.5, THEME.accent2),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 80, 120)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(100,80,120)),
     })
-    discordGrad.Parent = discord
+    dGrad.Parent = discordLbl
  
-    -- Attach dragging to header only
-    makeDraggable(card, header)
+    -- ── Mini pill (shown when closed) ─────────────────────────────────────
+    local pill = Instance.new("Frame")
+    pill.Name             = "Pill"
+    pill.Size             = UDim2.new(0, 220, 0, 36)
+    pill.BackgroundColor3 = THEME.bg
+    pill.BorderSizePixel  = 0
+    pill.Visible          = false
+    pill.Parent           = screenGui
+    mkCorner(pill, 18)
+    mkStroke(pill, THEME.accent, 1.5)
  
-    -- RenderStepped: animate status bar
+    -- Pill will appear at same position as card when closed
+    local pillNameLbl = Instance.new("TextLabel")
+    pillNameLbl.Size               = UDim2.new(1, 0, 0, 16)
+    pillNameLbl.Position           = UDim2.new(0, 0, 0, 2)
+    pillNameLbl.BackgroundTransparency = 1
+    pillNameLbl.Text               = "✦ Richie Hub Auto Grab"
+    pillNameLbl.TextColor3         = THEME.text
+    pillNameLbl.TextSize           = 10
+    pillNameLbl.Font               = Enum.Font.GothamBold
+    pillNameLbl.TextXAlignment     = Enum.TextXAlignment.Center
+    pillNameLbl.Parent             = pill
+    local pGrad = Instance.new("UIGradient")
+    pGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   THEME.accent),
+        ColorSequenceKeypoint.new(0.5, THEME.accent2),
+        ColorSequenceKeypoint.new(1,   THEME.accent),
+    })
+    pGrad.Parent = pillNameLbl
+ 
+    local pillDiscordLbl = Instance.new("TextLabel")
+    pillDiscordLbl.Size               = UDim2.new(1, 0, 0, 14)
+    pillDiscordLbl.Position           = UDim2.new(0, 0, 0, 18)
+    pillDiscordLbl.BackgroundTransparency = 1
+    pillDiscordLbl.Text               = "discord.gg/9QsSqQ3aRM"
+    pillDiscordLbl.TextColor3         = THEME.dim
+    pillDiscordLbl.TextSize           = 9
+    pillDiscordLbl.Font               = Enum.Font.Gotham
+    pillDiscordLbl.TextXAlignment     = Enum.TextXAlignment.Center
+    pillDiscordLbl.TextTransparency   = 0.2
+    pillDiscordLbl.Parent             = pill
+ 
+    -- Pill is also draggable and click to reopen
+    makeFullDraggable(pill, {pill, pillNameLbl, pillDiscordLbl})
+ 
+    local pillOpen = Instance.new("TextButton")
+    pillOpen.Size                  = UDim2.new(1,0,1,0)
+    pillOpen.BackgroundTransparency= 1
+    pillOpen.Text                  = ""
+    pillOpen.ZIndex                = 5
+    pillOpen.Parent                = pill
+ 
+    -- ── Close / reopen logic ──────────────────────────────────────────────
+    local isOpen = true
+ 
+    local function closeUI()
+        isOpen = false
+        -- Position pill where card was
+        local abs = card.AbsolutePosition
+        pill.AnchorPoint = Vector2.new(0,0)
+        pill.Position    = UDim2.new(0, abs.X, 0, abs.Y)
+        card.Visible     = false
+        pill.Visible     = true
+        savePos(abs.X, abs.Y)
+    end
+ 
+    local function openUI()
+        isOpen = true
+        local abs = pill.AbsolutePosition
+        card.AnchorPoint = Vector2.new(0,0)
+        card.Position    = UDim2.new(0, abs.X, 0, abs.Y)
+        card.Visible     = true
+        pill.Visible     = false
+    end
+ 
+    closeBtn.MouseButton1Click:Connect(closeUI)
+    pillOpen.MouseButton1Click:Connect(openUI)
+ 
+    -- ── Full-card drag (all surfaces) ─────────────────────────────────────
+    -- Collect all draggable surfaces: header, body, bar, inner — everything
+    makeFullDraggable(card, {header, body, bar, inner, card})
+ 
+    -- ── RenderStepped: animate status bar ─────────────────────────────────
     local lastFillPct = 0
     S.RunService.RenderStepped:Connect(function(dt)
-        local on = CONFIG.AUTO_STEAL_ENABLED
-        local active = StealState.active
-        local justFinished = StealState.lastResultTime > 0 and (tick() - StealState.lastResultTime) < 1.2
-        local success = justFinished and string.find(StealState.lastResult, "Stole") ~= nil
+        if not isOpen then return end
+        local on          = CONFIG.AUTO_STEAL_ENABLED
+        local active      = StealState.active
+        local justFinished= StealState.lastResultTime > 0 and (tick()-StealState.lastResultTime) < 1.5
+        local success     = justFinished and StealState.lastResult:find("Stole") ~= nil
  
         local dotTarget
         if active then
             dotTarget = StealState.phase == "waitingRange"
-                and Color3.fromRGB(255, 180, 60)
-                or Color3.fromRGB(255, 105, 180)
+                and Color3.fromRGB(255,180,60)
+                or  Color3.fromRGB(255,105,180)
         elseif justFinished then
-            dotTarget = success and Color3.fromRGB(255, 120, 200) or Color3.fromRGB(255, 70, 100)
+            dotTarget = success and Color3.fromRGB(255,120,200) or Color3.fromRGB(255,70,100)
         elseif on then
-            dotTarget = Color3.fromRGB(255, 160, 200)
+            dotTarget = Color3.fromRGB(255,160,200)
         else
-            dotTarget = Color3.fromRGB(80, 60, 70)
+            dotTarget = Color3.fromRGB(80,60,70)
         end
-        dot.BackgroundColor3 = dot.BackgroundColor3:Lerp(dotTarget, math.min(dt * 8, 1))
+        dot.BackgroundColor3 = dot.BackgroundColor3:Lerp(dotTarget, math.min(dt*8,1))
  
         local targetPct, targetColor
         if active then
-            targetPct = math.clamp((tick() - StealState.startTime) / CONFIG.HOLD_MAX, 0, 1)
+            targetPct   = math.clamp((tick()-StealState.startTime)/CONFIG.HOLD_MAX, 0, 1)
             targetColor = StealState.phase == "waitingRange"
-                and Color3.fromRGB(255, 180, 60)
-                or THEME.accent
+                and Color3.fromRGB(255,180,60)
+                or  THEME.accent
         elseif justFinished then
-            targetPct = 1
-            targetColor = success and Color3.fromRGB(255, 120, 200) or Color3.fromRGB(255, 70, 100)
+            targetPct   = 1
+            targetColor = success and Color3.fromRGB(255,120,200) or Color3.fromRGB(255,70,100)
         else
-            targetPct = 0
+            targetPct   = 0
             targetColor = THEME.accent
         end
  
-        lastFillPct = lastFillPct + (targetPct - lastFillPct) * math.min(dt * 14, 1)
-        fill.Size = UDim2.new(lastFillPct, 0, 1, 0)
-        fill.BackgroundColor3 = fill.BackgroundColor3:Lerp(targetColor, math.min(dt * 8, 1))
+        lastFillPct = lastFillPct + (targetPct-lastFillPct)*math.min(dt*14,1)
+        fill.Size             = UDim2.new(lastFillPct, 0, 1, 0)
+        fill.BackgroundColor3 = fill.BackgroundColor3:Lerp(targetColor, math.min(dt*8,1))
  
         if active then
-            local elapsed = tick() - StealState.startTime
-            label.Text = string.upper(StealState.label) .. "  " .. string.format("%.2fs", elapsed)
-            label.TextColor3 = Color3.fromRGB(245, 245, 255)
-            label.TextTransparency = 0
+            statusLbl.Text          = string.upper(StealState.label).."  "..string.format("%.2fs", tick()-StealState.startTime)
+            statusLbl.TextColor3    = Color3.fromRGB(245,245,255)
+            statusLbl.TextTransparency = 0
         elseif justFinished then
-            label.Text = string.upper(StealState.lastResult)
-            label.TextColor3 = success and Color3.fromRGB(255, 220, 235) or Color3.fromRGB(255, 220, 220)
-            label.TextTransparency = 0
+            statusLbl.Text          = string.upper(StealState.lastResult)
+            statusLbl.TextColor3    = success and Color3.fromRGB(255,220,235) or Color3.fromRGB(255,200,200)
+            statusLbl.TextTransparency = 0
         else
-            label.Text = on and "READY" or "IDLE"
-            label.TextColor3 = Color3.fromRGB(160, 140, 150)
-            label.TextTransparency = 0.25
+            statusLbl.Text          = on and "READY" or "IDLE"
+            statusLbl.TextColor3    = THEME.dim
+            statusLbl.TextTransparency = 0.25
         end
  
-        barStroke.Transparency = active and 0.1 or 0.45
+        barStroke.Transparency = active and 0.05 or 0.5
         barStroke.Color = active
             and (StealState.phase == "waitingRange"
-                and Color3.fromRGB(255, 180, 60)
-                or Color3.fromRGB(255, 140, 200))
-            or Color3.fromRGB(80, 60, 75)
+                and Color3.fromRGB(255,180,60)
+                or  Color3.fromRGB(255,140,200))
+            or Color3.fromRGB(70,50,65)
     end)
 end
  
+-- ─── Boot ────────────────────────────────────────────────────────────────────
 task.spawn(function()
     while task.wait(5) do scanAllPlots() end
 end)
