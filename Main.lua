@@ -1,9 +1,9 @@
 local CONFIG = {
     AUTO_STEAL_ENABLED = true,
-    HOLD_MIN = 0.4,   -- was 1.3
-    HOLD_MAX = 0.9,   -- was 2.6
-    ENTRY_DELAY = 0.05, -- was 0.3
-    COOLDOWN = 0.02,  -- was 0.05
+    HOLD_MIN = 0.1,   -- was 1.3
+    HOLD_MAX = 0.2,   -- was 2.6
+    ENTRY_DELAY = 0.01, -- was 0.3
+    COOLDOWN = 0.01,  -- was 0.05
     STEAL_RANGE = 25,
     PRIME_RANGE = 80,
 }
